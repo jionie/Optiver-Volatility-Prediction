@@ -188,8 +188,6 @@ def book_preprocessor(file_path):
     # Calculate Wap
     df["wap1"] = calc_wap(df, pos=1)
     df["wap2"] = calc_wap(df, pos=2)
-    df["wap3"] = calc_wap2(df, pos=1)
-    df["wap4"] = calc_wap2(df, pos=2)
 
     # Calculate wap balance
     df["wap_balance"] = abs(df["wap1"] - df["wap2"])
@@ -197,26 +195,14 @@ def book_preprocessor(file_path):
     # Calculate log returns
     df["log_return1"] = df.groupby(["time_id"])["wap1"].apply(log_return)
     df["log_return2"] = df.groupby(["time_id"])["wap2"].apply(log_return)
-    df["log_return3"] = df.groupby(["time_id"])["wap3"].apply(log_return)
-    df["log_return4"] = df.groupby(["time_id"])["wap4"].apply(log_return)
 
     # Calculate spread
-    df["bid_spread"] = df["bid_price1"] / df["bid_price2"] - 1
-    df["ask_spread"] = df["ask_price2"] / df["ask_price1"] - 1
     df["bid_ask_spread1"] = df["ask_price1"] / df["bid_price1"] - 1
     df["bid_ask_spread2"] = df["ask_price2"] / df["bid_price2"] - 1
-
-    # bid ask spread log return
-    df["bid_ask_spread_log_return1"] = df.groupby(["time_id"])["bid_ask_spread1"].apply(log_return)
-    df["bid_ask_spread_log_return2"] = df.groupby(["time_id"])["bid_ask_spread2"].apply(log_return)
 
     # order flow imbalance
     df["order_flow_imbalance1"] = order_flow_imbalance(df, 1)
     df["order_flow_imbalance2"] = order_flow_imbalance(df, 2)
-
-    # order flow imbalance log return
-    df["order_flow_imbalance_log_return1"] = df.groupby(["time_id"])["order_flow_imbalance1"].apply(log_return)
-    df["order_flow_imbalance_log_return2"] = df.groupby(["time_id"])["order_flow_imbalance2"].apply(log_return)
 
     # order book slope
     order_slope_ = order_book_slope(df)
@@ -240,44 +226,32 @@ def book_preprocessor(file_path):
     create_feature_dict = {
         "wap1": [np.sum, np.std],
         "wap2": [np.sum, np.std],
-        "wap3": [np.sum, np.std],
-        "wap4": [np.sum, np.std],
         "log_return1": [realized_volatility],
         "log_return2": [realized_volatility],
-        "log_return3": [realized_volatility],
-        "log_return4": [realized_volatility],
-        "wap_balance": [np.sum, np.max, np.min],
-        "bid_spread": [np.sum, np.max, np.min],
-        "ask_spread": [np.sum, np.max, np.min],
-        "bid_ask_spread1": [np.sum, np.max, np.min],
-        "bid_ask_spread2": [np.sum, np.max, np.min],
-        "bid_ask_spread_log_return1": [realized_volatility],
-        "bid_ask_spread_log_return2": [realized_volatility],
-        "order_flow_imbalance1": [np.sum, np.max, np.min],
-        "order_flow_imbalance2": [np.sum, np.max, np.min],
-        "order_flow_imbalance_log_return1": [realized_volatility],
-        "order_flow_imbalance_log_return2": [realized_volatility],
-        "order_book_slope": [np.mean, np.max, np.min],
-        "depth_imbalance1": [np.sum, np.max, np.min],
-        "depth_imbalance2": [np.sum, np.max, np.min],
-        "height_imbalance1": [np.sum, np.max, np.min],
-        "height_imbalance2": [np.sum, np.max, np.min],
-        "pressure_imbalance": [np.sum, np.max, np.min, np.std],
-        "total_volume": [np.sum, np.max, np.min],
-        "seconds_in_bucket": [count_unique],
-        "seconds_gap": [np.mean, np.max, np.min]
+        "wap_balance": [np.sum, np.max, np.min, np.std],
+        "bid_ask_spread1": [np.sum, np.max, np.min, np.std],
+        "bid_ask_spread2": [np.sum, np.max, np.min, np.std],
+        "order_flow_imbalance1": [np.sum, np.max, np.min, np.std],
+        "order_flow_imbalance2": [np.sum, np.max, np.min, np.std],
+        "order_book_slope": [np.mean, np.max],
+        "depth_imbalance1": [np.sum, np.max, np.std],
+        "depth_imbalance2": [np.sum, np.max, np.std],
+        "height_imbalance1": [np.sum, np.max, np.std],
+        "height_imbalance2": [np.sum, np.max, np.std],
+        "pressure_imbalance": [np.sum, np.max, np.std],
+        "total_volume": [np.sum],
+        "seconds_gap": [np.mean]
     }
     create_feature_dict_time = {
         "log_return1": [realized_volatility],
         "log_return2": [realized_volatility],
-        "log_return3": [realized_volatility],
-        "log_return4": [realized_volatility],
-        "bid_ask_spread_log_return1": [realized_volatility],
-        "bid_ask_spread_log_return2": [realized_volatility],
-        "order_flow_imbalance_log_return1": [realized_volatility],
-        "order_flow_imbalance_log_return2": [realized_volatility],
-        "total_volume": [np.sum, np.max, np.min],
-        "seconds_gap": [np.mean, np.max, np.min]
+        "wap_balance": [np.sum, np.max, np.min, np.std],
+        "bid_ask_spread1": [np.sum, np.max, np.min, np.std],
+        "bid_ask_spread2": [np.sum, np.max, np.min, np.std],
+        "order_flow_imbalance1": [np.sum, np.max, np.min, np.std],
+        "order_flow_imbalance2": [np.sum, np.max, np.min, np.std],
+        "total_volume": [np.sum],
+        "seconds_gap": [np.mean]
     }
 
     # Function to get group stats for different windows (seconds in bucket)
@@ -336,32 +310,21 @@ def trade_preprocessor(file_path):
     # Calculate log return
     df["price_log_return"] = df.groupby("time_id")["price"].apply(log_return)
 
-    # Calculate size log return
-    df["size_log_return"] = df.groupby("time_id")["size"].apply(log_return)
-
     # Calculate volumes
     df["volumes"] = df["price"] * df["size"]
-    df["volumes_log_return"] = df.groupby("time_id")["volumes"].apply(log_return)
 
     # Dict for aggregations
     create_feature_dict = {
         "price_log_return": [realized_volatility],
-        "size_log_return": [realized_volatility],
-        "volumes_log_return": [realized_volatility],
-        "volumes": [np.sum, np.max, np.min],
-        "size": [np.sum, np.max, np.min],
-        "order_count": [np.sum, np.max, np.min],
-        "seconds_in_bucket": [count_unique],
-        "seconds_gap": [np.mean, np.max, np.min, np.std]
+        "volumes": [np.sum, np.max, np.std],
+        "order_count": [np.sum],
+        "seconds_gap": [np.mean]
     }
     create_feature_dict_time = {
         "price_log_return": [realized_volatility],
-        "size_log_return": [realized_volatility],
-        "volumes_log_return": [realized_volatility],
-        "size": [np.sum, np.max, np.min],
-        "order_count": [np.sum, np.max, np.min],
-        "seconds_in_bucket": [count_unique],
-        "seconds_gap": [np.mean, np.max, np.min, np.std]
+        "volumes": [np.sum, np.max, np.std],
+        "order_count": [np.sum],
+        "seconds_gap": [np.mean]
     }
 
     # Function to get group stats for different windows (seconds in bucket)
@@ -403,35 +366,15 @@ def trade_preprocessor(file_path):
     lis = []
     for n_time_id in df["time_id"].unique():
         df_id = df[df["time_id"] == n_time_id]
-        tendencyV = tendency(df_id["price"].values, df_id["size"].values)
-        f_max = np.sum(df_id["price"].values > np.mean(df_id["price"].values))
-        f_min = np.sum(df_id["price"].values < np.mean(df_id["price"].values))
-        df_max = np.sum(np.diff(df_id["price"].values) > 0)
-        df_min = np.sum(np.diff(df_id["price"].values) < 0)
-        # new
-        abs_diff = np.median(np.abs(df_id["price"].values - np.mean(df_id["price"].values)))
-        energy = np.mean(df_id["price"].values ** 2)
-        iqr_p = np.percentile(df_id["price"].values, 75) - np.percentile(df_id["price"].values, 25)
 
-        # vol vars
-        abs_diff_v = np.median(np.abs(df_id["size"].values - np.mean(df_id["size"].values)))
-        energy_v = np.sum(df_id["size"].values ** 2)
-        iqr_p_v = np.percentile(df_id["size"].values, 75) - np.percentile(df_id["size"].values, 25)
+        tendencyV = tendency(df_id["price"].values, df_id["size"].values)
+        energy = np.mean(df_id["price"].values ** 2)
 
         lis.append(
             {
                 "time_id": n_time_id,
                 "tendency": tendencyV,
-                "f_max": f_max,
-                "f_min": f_min,
-                "df_max": df_max,
-                "df_min": df_min,
-                "abs_diff": abs_diff,
                 "energy": energy,
-                "iqr_p": iqr_p,
-                "abs_diff_v": abs_diff_v,
-                "energy_v": energy_v,
-                "iqr_p_v": iqr_p_v
             }
         )
 
@@ -446,26 +389,9 @@ def trade_preprocessor(file_path):
     return df_feature
 
 
-# Process size tau
-def process_size_tau(df, windows=None):
-    if windows is None:
-        windows = [0, 150, 300, 450]
-
-    for window in windows:
-        if window == 0:
-            df["size_tau"] = np.sqrt(1 / df["trade_seconds_in_bucket_count_unique"])
-            df["size_tau2"] = np.sqrt(1 / df["trade_order_count_sum"])
-        else:
-            df["size_tau_{}".format(window)] = np.sqrt(1 / df["trade_seconds_in_bucket_count_unique_{}".format(window)])
-            df["size_tau2_{}".format(window)] = np.sqrt(
-                (1 - window / 600) / df["trade_order_count_sum_{}".format(window)])
-
-    return df
-
-
 # Process agg by kmeans
-def get_kmeans_idx(n_clusters=7, train_path="../input/optiver-realized-volatility-prediction/train.csv"):
-    train_p = pd.read_csv(train_path)
+def get_kmeans_idx(n_clusters=7):
+    train_p = pd.read_csv("../input/optiver-realized-volatility-prediction/train.csv")
     train_p = train_p.pivot(index="time_id", columns="stock_id", values="target")
 
     corr = train_p.corr()
@@ -481,8 +407,7 @@ def get_kmeans_idx(n_clusters=7, train_path="../input/optiver-realized-volatilit
     return kmeans_clusters
 
 
-def agg_mean_features_by_clusters(df, n_clusters=7, post_fix="_cluster_mean"):
-
+def agg_stat_features_by_clusters(df, n_clusters=7, function=np.nanmean, post_fix="_cluster_mean"):
     kmeans_clusters = get_kmeans_idx(n_clusters=n_clusters)
 
     clusters = []
@@ -491,35 +416,26 @@ def agg_mean_features_by_clusters(df, n_clusters=7, post_fix="_cluster_mean"):
         "stock_id",
         "log_return1_realized_volatility",
         "log_return2_realized_volatility",
-        "log_return3_realized_volatility",
-        "log_return4_realized_volatility",
-        "bid_ask_spread_log_return1_realized_volatility",
-        "bid_ask_spread_log_return2_realized_volatility",
-        "order_flow_imbalance_log_return1_realized_volatility",
-        "order_flow_imbalance_log_return2_realized_volatility",
+        "order_flow_imbalance1_sum",
+        "order_flow_imbalance2_sum",
         "order_book_slope_mean",
-        "order_book_slope_amax",
-        "order_book_slope_amin",
+        "depth_imbalance1_std",
+        "depth_imbalance2_std",
+        "height_imbalance1_sum",
+        "height_imbalance2_sum",
+        "pressure_imbalance_std",
         "total_volume_sum",
-        "total_volume_amax",
-        "total_volume_amin",
         "seconds_gap_mean",
-        "seconds_gap_amax",
-        "seconds_gap_amin",
-        "trade_size_sum",
-        "trade_size_amax",
-        "trade_size_amin",
+        "trade_price_log_return_realized_volatility",
+        "trade_volumes_sum",
         "trade_order_count_sum",
-        "trade_order_count_amax",
-        "trade_order_count_amin",
         "trade_seconds_gap_mean",
-        "trade_seconds_gap_amax",
-        "trade_seconds_gap_amin",
-        "size_tau2"
+        "trade_tendency",
+        "trade_energy"
     ]
 
     for cluster_idx, ind in enumerate(kmeans_clusters):
-        cluster_df = df.loc[df["stock_id"].isin(ind), agg_columns].groupby(["time_id"]).agg(np.nanmean)
+        cluster_df = df.loc[df["stock_id"].isin(ind), agg_columns].groupby(["time_id"]).agg(function)
         cluster_df.loc[:, "stock_id"] = str(cluster_idx) + post_fix
         clusters.append(cluster_df)
 
@@ -551,36 +467,8 @@ def agg_mean_features_by_clusters(df, n_clusters=7, post_fix="_cluster_mean"):
     return df
 
 
-def agg_rank_features_by_clusters(df, n_clusters=7, post_fix="_cluster_rank"):
-
-    kmeans_clusters = get_kmeans_idx(n_clusters=n_clusters)
-    agg_columns = [
-        "log_return1_realized_volatility",
-        "order_flow_imbalance_log_return1_realized_volatility",
-        "total_volume_sum",
-        "trade_size_sum",
-        "trade_order_count_sum",
-        "bid_ask_spread1_sum",
-        "size_tau2"
-    ]
-
-    def get_clusters_id(value, kmeans_clusters):
-        for cluster_idx, ind in enumerate(kmeans_clusters):
-            if value in ind:
-                return cluster_idx
-
-    df["stock_cluster_idx"] = df["stock_id"].apply(get_clusters_id, args=(kmeans_clusters,))
-
-    for cluster_idx, ind in enumerate(kmeans_clusters):
-        agg_columns_with_postfix = [column + str(cluster_idx) + "_" + post_fix for column in agg_columns]
-        df[agg_columns_with_postfix] = df.groupby(["time_id", "stock_cluster_idx"])[agg_columns].rank(pct=True)
-
-    df.drop("stock_cluster_idx", axis=1, inplace=True)
-    return df
-
-
-# Function to get group stats for the stock_id and time_id
-def get_time_stock(df, operations=None, operations_names=None):
+# Function to get group stats for the time_id
+def agg_stat_features_by_market(df, operations=None, operations_names=None):
     def percentile(n):
         def percentile_(x):
             return np.percentile(x, n)
@@ -590,26 +478,10 @@ def get_time_stock(df, operations=None, operations_names=None):
 
     if operations is None:
         operations = [
-            np.mean,
-            np.std,
-            np.min,
-            np.max,
-            # percentile(10),
-            # percentile(30),
-            # percentile(50),
-            # percentile(70),
-            # percentile(90),
+            np.nanmean,
         ]
         operations_names = [
             "mean",
-            "std",
-            "amin",
-            "amax",
-            # "percentile_10",
-            # "percentile_30",
-            # "percentile_50",
-            # "percentile_70",
-            # "percentile_90",
         ]
 
     # Get realized volatility columns
@@ -618,34 +490,6 @@ def get_time_stock(df, operations=None, operations_names=None):
         "log_return1_realized_volatility_150",
         "log_return1_realized_volatility_300",
         "log_return1_realized_volatility_450",
-        "order_flow_imbalance_log_return1_realized_volatility",
-        "order_flow_imbalance_log_return1_realized_volatility_150",
-        "order_flow_imbalance_log_return1_realized_volatility_300",
-        "order_flow_imbalance_log_return1_realized_volatility_450",
-        "bid_ask_spread_log_return1_realized_volatility",
-        "bid_ask_spread_log_return1_realized_volatility_150",
-        "bid_ask_spread_log_return1_realized_volatility_300",
-        "bid_ask_spread_log_return1_realized_volatility_450",
-        "seconds_gap_mean",
-        "seconds_gap_mean_150",
-        "seconds_gap_mean_300",
-        "seconds_gap_mean_450",
-        "trade_price_log_return_realized_volatility",
-        "trade_price_log_return_realized_volatility_150",
-        "trade_price_log_return_realized_volatility_300",
-        "trade_price_log_return_realized_volatility_450",
-        "total_volume_sum",
-        "total_volume_sum_150",
-        "total_volume_sum_300",
-        "total_volume_sum_450",
-        "trade_size_sum",
-        "trade_size_sum_150",
-        "trade_size_sum_300",
-        "trade_size_sum_450",
-        "trade_seconds_gap_mean",
-        "trade_seconds_gap_mean_150",
-        "trade_seconds_gap_mean_300",
-        "trade_seconds_gap_mean_450",
     ]
 
     # Group by the stock id

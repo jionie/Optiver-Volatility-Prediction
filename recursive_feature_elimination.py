@@ -5,6 +5,7 @@ import json
 from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.model_selection import GroupKFold
+from sklearn.feature_selection import RFE
 import lightgbm as lgb
 import warnings
 
@@ -18,7 +19,7 @@ from utils.fe import book_preprocessor, trade_preprocessor, get_time_stock, agg_
 CONFIG = {
     "root_dir": "../input/optiver-realized-volatility-prediction/",
     "kfold_seed": 42,
-    "n_splits": 1,
+    "n_splits": 5,
     "n_clusters": 7,
 }
 
@@ -53,6 +54,11 @@ def rmspe(y_true, y_pred):
 # Function to early stop with root mean squared percentage error
 def feval_rmspe(y_pred, lgb_train):
     y_true = lgb_train.get_label()
+    return "RMSPE", rmspe(y_true, y_pred), False
+
+
+# Function to early stop with root mean squared percentage error
+def eval_rmspe(y_pred, y_true):
     return "RMSPE", rmspe(y_true, y_pred), False
 
 
@@ -161,143 +167,51 @@ def generate_fold_data(train):
     return
 
 
-def ffs():
-
-    # get folds data
-    x_train_folds = []
-    x_val_folds = []
-    y_train_folds = []
-    y_val_folds = []
-
-    for fold in range(CONFIG["n_splits"]):
-        print("loading fold {} data".format(fold + 1))
-        x_train = pd.read_csv("x_train_fold_{}.csv".format(fold + 1))
-        x_val = pd.read_csv("x_val_fold_{}.csv".format(fold + 1))
-        y_train = pd.read_csv("y_train_fold_{}.csv".format(fold + 1))
-        y_val = pd.read_csv("y_val_fold_{}.csv".format(fold + 1))
-
-        x_train_folds.append(x_train)
-        x_val_folds.append(x_val)
-        y_train_folds.append(y_train)
-        y_val_folds.append(y_val)
-
-    train_columns = x_train_folds[0].columns
+def rfe():
 
     # sort single feature and their score
     feature_score_map = {}
 
-    for column in train_columns:
+    for fold in range(CONFIG["n_splits"]):
 
-        predictions = []
-        labels = []
-        curr_column = [column]
+        print("loading fold {} data".format(fold + 1))
+        x_train = pd.read_csv("x_train_fold_{}.csv".format(fold + 1))
+        x_val = pd.read_csv("x_val_fold_{}.csv".format(fold + 1))
+        y_train = pd.read_csv("y_train_fold_{}.csv".format(fold + 1)).squeeze()
+        y_val = pd.read_csv("y_val_fold_{}.csv".format(fold + 1)).squeeze()
 
-        for fold in range(CONFIG["n_splits"]):
+        train_columns = x_train.columns
 
-            x_train = x_train_folds[fold][curr_column]
-            x_val = x_val_folds[fold][curr_column]
-            y_train = y_train_folds[fold].squeeze()
-            y_val = y_val_folds[fold].squeeze()
+        # Root mean squared percentage error weights
+        train_weights = 1 / np.square(y_train)
+        val_weights = 1 / np.square(y_val)
 
-            # Root mean squared percentage error weights
-            train_weights = 1 / np.square(y_train)
-            val_weights = 1 / np.square(y_val)
-            if curr_column == "stock_id":
-                train_dataset = lgb.Dataset(x_train, y_train, weight=train_weights, categorical_feature=["stock_id"])
-                val_dataset = lgb.Dataset(x_val, y_val, weight=val_weights, categorical_feature=["stock_id"])
+        model = lgb.LGBMRegressor(**PARAMS, num_boost_round=6000)
+        model.fit(
+            X=x_train,
+            y=y_train,
+            sample_weight=train_weights,
+            eval_set=[(x_train, y_train), (x_val, y_val)],
+            eval_sample_weight=[train_weights, val_weights],
+            eval_metric=eval_rmspe,
+            categorical_feature=["stock_id"],
+            early_stopping_rounds=300,
+            verbose=100,
+        )
+        selector = RFE(model, n_features_to_select=400, step=30).fit(x_val, y_val)
+        ranking = selector.ranking_
+
+        for idx, column in enumerate(train_columns):
+
+            if column not in feature_score_map:
+                feature_score_map[column] = ranking[idx]
             else:
-                train_dataset = lgb.Dataset(x_train, y_train, weight=train_weights)
-                val_dataset = lgb.Dataset(x_val, y_val, weight=val_weights)
-
-            # Train
-            model = lgb.train(params=PARAMS,
-                              train_set=train_dataset,
-                              valid_sets=val_dataset,
-                              num_boost_round=6000,
-                              early_stopping_rounds=300,
-                              verbose_eval=100,
-                              feval=feval_rmspe
-                              )
-
-            # Add predictions
-            predictions.append(model.predict(x_val))
-            labels.append(y_val)
-
-        predictions = np.concatenate(predictions, axis=0)
-        labels = np.concatenate(labels, axis=0)
-
-        rmspe_score = rmspe(labels, predictions)
-        print("Our out of folds RMSPE of feature {} is {}".format(column, rmspe_score))
-
-        feature_score_map[column] = rmspe_score
+                feature_score_map[column] += ranking[idx]
 
     # sort feature_score_map
     feature_score_map = {k: v for k, v in sorted(feature_score_map.items(), key=lambda item: item[1])}
 
-    # ffs
-    sorted_columns = list(feature_score_map.keys())
-    usefull_columns = [sorted_columns[0]]
-    not_usefull_columns = []
-    best_score = feature_score_map[sorted_columns[0]]
-
-    # forward feature selection
-    for iteration, column in enumerate(sorted_columns):
-
-        if column in usefull_columns:
-            continue
-
-        curr_columns = usefull_columns + [column]
-        predictions = []
-        labels = []
-
-        for fold in range(CONFIG["n_splits"]):
-
-            x_train = x_train_folds[fold][curr_columns]
-            x_val = x_val_folds[fold][curr_columns]
-            y_train = y_train_folds[fold].squeeze()
-            y_val = y_val_folds[fold].squeeze()
-
-            # Root mean squared percentage error weights
-            train_weights = 1 / np.square(y_train)
-            val_weights = 1 / np.square(y_val)
-            if "stock_id" in curr_columns:
-                train_dataset = lgb.Dataset(x_train, y_train, weight=train_weights, categorical_feature=["stock_id"])
-                val_dataset = lgb.Dataset(x_val, y_val, weight=val_weights, categorical_feature=["stock_id"])
-            else:
-                train_dataset = lgb.Dataset(x_train, y_train, weight=train_weights)
-                val_dataset = lgb.Dataset(x_val, y_val, weight=val_weights)
-
-            # Train
-            model = lgb.train(params=PARAMS,
-                              train_set=train_dataset,
-                              valid_sets=val_dataset,
-                              num_boost_round=6000,
-                              early_stopping_rounds=300,
-                              verbose_eval=100,
-                              feval=feval_rmspe
-                              )
-
-            # Add predictions
-            predictions.append(model.predict(x_val))
-            labels.append(y_val)
-
-        predictions = np.concatenate(predictions, axis=0)
-        labels = np.concatenate(labels, axis=0)
-
-        rmspe_score = rmspe(labels, predictions)
-        print("Our out of folds RMSPE adding feature {} is {}".format(column, rmspe_score))
-
-        if rmspe_score < best_score:
-            print("Column {} is usefull".format(column))
-            best_score = rmspe_score
-            usefull_columns.append(column)
-        else:
-            print("Column {} is not usefull".format(column))
-            not_usefull_columns.append(column)
-
-        print("Best rmse score for iteration {} is {}".format(iteration + 1, best_score))
-
-    return usefull_columns, not_usefull_columns
+    return feature_score_map
 
 
 def main():
@@ -329,19 +243,17 @@ def main():
     # # generate fold data
     # generate_fold_data(train)
 
-    # run forward feature selection
-    usefull_columns, not_usefull_columns = ffs()
+    # run permutation importance
+    feature_score_map = rfe()
+    print(feature_score_map)
 
     # save results
-    results = {
-        "usefull_columns": usefull_columns,
-        "not_usefull_columns": not_usefull_columns
-    }
-    with open("useful_columns.json", "w") as f:
-        json.dump(results, f, ensure_ascii=False, indent=4)
+    with open("recursive_feature.json", "w") as f:
+        json.dump(feature_score_map, f, ensure_ascii=False, indent=4)
 
     return
 
 
 if __name__ == "__main__":
     main()
+

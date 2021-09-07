@@ -1,5 +1,6 @@
 import os
 from joblib import Parallel, delayed, dump, load
+import gc
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
@@ -122,6 +123,7 @@ def train_and_evaluate(train, test):
     except_columns = ["stock_id", "time_id", "target", "row_id"]
     normalized_columns = [column for column in x_test.columns if column not in except_columns]
     x_test.drop("time_id", axis=1, inplace=True)
+    realized_volatility_test = x_test["log_return1_realized_volatility"]
 
     # Transform stock id to a numeric value
     x["stock_id"] = x["stock_id"].astype(int)
@@ -153,6 +155,7 @@ def train_and_evaluate(train, test):
         x_train.drop("time_id", axis=1, inplace=True)
         scaler = scaler.fit(x_train[normalized_columns])
         dump(scaler, os.path.join(CONFIG["ckpt_dir"], "std_scaler_fold_{}.bin".format(fold + 1)), compress=True)
+        realized_volatility_train = x_train["log_return1_realized_volatility"]
         x_train[normalized_columns] = scaler.transform(x_train[normalized_columns])
 
         x_val = x.iloc[val_ind]
@@ -166,9 +169,12 @@ def train_and_evaluate(train, test):
         x_val = agg_stat_features_by_clusters(x_val, n_clusters=CONFIG["n_clusters"], function=np.nanstd,
                                               post_fix="_cluster_std")
         x_val.drop("time_id", axis=1, inplace=True)
+        realized_volatility_val = x_val["log_return1_realized_volatility"]
         x_val[normalized_columns] = scaler.transform(x_val[normalized_columns])
 
         y_train, y_val = y.iloc[trn_ind], y.iloc[val_ind]
+        y_train = (y_train - realized_volatility_train) / realized_volatility_train
+        y_val = (y_val - realized_volatility_val) / realized_volatility_val
 
         # Root mean squared percentage error weights
         train_weights = 1 / np.square(y_train)
@@ -195,12 +201,12 @@ def train_and_evaluate(train, test):
         plt.close(fig)
 
         # Add predictions to the out of folds array
-        oof_predictions[val_ind] = model.predict(x_val)
+        oof_predictions[val_ind] = (model.predict(x_val) + 1) * realized_volatility_val
 
         # Predict the test set
         x_test_ = x_test.copy()
         x_test_[normalized_columns] = scaler.transform(x_test_[normalized_columns])
-        test_predictions += model.predict(x_test_) / CONFIG["n_splits"]
+        test_predictions += (model.predict(x_test_) + 1) * realized_volatility_test / CONFIG["n_splits"]
 
     rmspe_score = rmspe(y, oof_predictions)
     print(f"Our out of folds RMSPE is {rmspe_score}")

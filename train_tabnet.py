@@ -2,10 +2,13 @@ import os
 from joblib import Parallel, delayed, dump, load
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.preprocessing import StandardScaler, QuantileTransformer
+from sklearn.preprocessing import StandardScaler, QuantileTransformer, LabelEncoder
 from sklearn.model_selection import GroupKFold
-import lightgbm as lgb
+from pytorch_tabnet.metrics import Metric
+from pytorch_tabnet.tab_model import TabNetRegressor
+import torch
+from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -15,31 +18,10 @@ from utils.fe import book_preprocessor, trade_preprocessor, agg_stat_features_by
 
 CONFIG = {
     "root_dir": "../input/optiver-realized-volatility-prediction/",
+    "ckpt_path": "../../ckpts/",
     "kfold_seed": 42,
     "n_splits": 5,
     "n_clusters": 7,
-}
-
-PARAMS = {
-    "objective": "rmse",
-    "boosting_type": "gbdt",
-    "max_depth": -1,
-    "max_bin": 100,
-    "min_data_in_leaf": 500,
-    "learning_rate": 0.05,
-    "subsample": 0.72,
-    "subsample_freq": 4,
-    "feature_fraction": 0.5,
-    "lambda_l1": 0.5,
-    "lambda_l2": 1.0,
-    "categorical_column": [0],
-    "seed": 2021,
-    "feature_fraction_seed": 2021,
-    "bagging_seed": 2021,
-    "drop_seed": 2021,
-    "data_random_seed": 2021,
-    "n_jobs": -1,
-    "verbose": -1
 }
 
 
@@ -48,10 +30,17 @@ def rmspe(y_true, y_pred):
     return np.sqrt(np.mean(np.square((y_true - y_pred) / y_true)))
 
 
-# Function to early stop with root mean squared percentage error
-def feval_rmspe(y_pred, lgb_train):
-    y_true = lgb_train.get_label()
-    return "RMSPE", rmspe(y_true, y_pred), False
+class RMSPE(Metric):
+    def __init__(self):
+        self._name = "rmspe"
+        self._maximize = False
+
+    def __call__(self, y_true, y_score):
+        return np.sqrt(np.mean(np.square((y_true - y_score) / y_true)))
+
+
+def RMSPELoss(y_pred, y_true):
+    return torch.sqrt(torch.mean(((y_true - y_pred) / y_true) ** 2)).clone()
 
 
 def read_train_test():
@@ -98,6 +87,13 @@ def preprocessor(list_stock_ids, is_train=True):
 
 def train_and_evaluate(train, test):
 
+    # label encoder
+    cat_columns = ["stock_id"]
+    label_encoder = LabelEncoder()
+    train[cat_columns] = label_encoder.fit_transform(train[cat_columns].values)
+    test[cat_columns] = label_encoder.transform(test[cat_columns].values)
+    cat_dims = [len(label_encoder.classes_)]
+
     # scale
     # scaler = QuantileTransformer(n_quantiles=2000, random_state=2021)
     scaler = StandardScaler()
@@ -123,15 +119,41 @@ def train_and_evaluate(train, test):
     normalized_columns = [column for column in x_test.columns if column not in except_columns]
     x_test.drop("time_id", axis=1, inplace=True)
 
-    # Transform stock id to a numeric value
-    x["stock_id"] = x["stock_id"].astype(int)
-    x_test["stock_id"] = x_test["stock_id"].astype(int)
+    # Process categorical features and get params dict
+    cat_idxs = [i for i, f in enumerate(x_test.columns.tolist()) if f in cat_columns]
+
+    params = dict(
+        cat_idxs=cat_idxs,
+        cat_dims=cat_dims,
+        cat_emb_dim=1,
+        n_d=16,
+        n_a=16,
+        n_steps=2,
+        gamma=2,
+        n_independent=2,
+        n_shared=2,
+        lambda_sparse=0,
+        optimizer_fn=Adam,
+        optimizer_params=dict(lr=(2e-2)),
+        mask_type="entmax",
+        scheduler_params=dict(T_0=200, T_mult=1, eta_min=1e-4, last_epoch=-1, verbose=False),
+        scheduler_fn=CosineAnnealingWarmRestarts,
+        seed=42,
+        verbose=10
+    )
 
     # Create out of folds array
     oof_predictions = np.zeros(x.shape[0])
 
     # Create test array to store predictions
     test_predictions = np.zeros(x_test.shape[0])
+
+    # Statistics
+    feature_importances = pd.DataFrame()
+    feature_importances["feature"] = x_test.columns.tolist()
+    stats = pd.DataFrame()
+    explain_matrices = []
+    masks_ = []
 
     # Create a KFold object
     kfold = GroupKFold(n_splits=CONFIG["n_splits"])
@@ -170,43 +192,45 @@ def train_and_evaluate(train, test):
 
         y_train, y_val = y.iloc[trn_ind], y.iloc[val_ind]
 
-        # Root mean squared percentage error weights
-        train_weights = 1 / np.square(y_train)
-        val_weights = 1 / np.square(y_val)
-        train_dataset = lgb.Dataset(x_train, y_train, weight=train_weights, categorical_feature=["stock_id"])
-        val_dataset = lgb.Dataset(x_val, y_val, weight=val_weights, categorical_feature=["stock_id"])
-
         # Train
-        model = lgb.train(params=PARAMS,
-                          train_set=train_dataset,
-                          valid_sets=[train_dataset, val_dataset],
-                          num_boost_round=6000,
-                          early_stopping_rounds=300,
-                          verbose_eval=100,
-                          feval=feval_rmspe
-                          )
+        clf = TabNetRegressor(**params)
+        clf.fit(
+            x_train.values, y_train,
+            eval_set=[(x_val.values, y_val)],
+            max_epochs=200,
+            patience=50,
+            batch_size=1024 * 20,
+            virtual_batch_size=128 * 20,
+            num_workers=0,
+            drop_last=False,
+            eval_metric=[RMSPE],
+            loss_fn=RMSPELoss
+        )
 
-        # Feature Importance
-        fig, ax = plt.subplots(figsize=(12, 30))
-        lgb.plot_importance(model, max_num_features=50, ax=ax)
-        plt.title("Feature importance")
-        plt.show()
-        fig.savefig("fold_{}.png".format(fold + 1))
-        plt.close(fig)
+        # save model
+        saved_filepath = clf.save_model(os.path.join(CONFIG["ckpt_path"], "tabnet_fold{}".format(fold + 1)))
 
-        # Add predictions to the out of folds array
-        oof_predictions[val_ind] = model.predict(x_val)
+        # save statistics
+        explain_matrix, masks = clf.explain(x_val.values)
+        explain_matrices.append(explain_matrix)
+        masks_.append(masks[0])
+        masks_.append(masks[1])
 
-        # Predict the test set
+        feature_importances["importance_fold{}".format(fold + 1)] = clf.feature_importances_
+        stats["fold{}_train_rmspe".format(fold + 1)] = clf.history["loss"]
+        stats["fold{}_val_rmspe".format(fold + 1)] = clf.history["val_0_rmspe"]
+
+        # save oof and test predictions
+        oof_predictions[val_ind] = clf.predict(x_val.values).flatten()
         x_test_ = x_test.copy()
         x_test_[normalized_columns] = scaler.transform(x_test_[normalized_columns])
-        test_predictions += model.predict(x_test_) / CONFIG["n_splits"]
+        test_predictions += clf.predict(x_test_.values).flatten() / CONFIG["n_splits"]
 
     rmspe_score = rmspe(y, oof_predictions)
-    print(f"Our out of folds RMSPE is {rmspe_score}")
+    print("Our out of folds RMSPE is {}".format(rmspe_score))
 
     # Return test predictions
-    return test_predictions
+    return test_predictions, stats, feature_importances, explain_matrices, masks_
 
 
 def main():
@@ -253,7 +277,7 @@ def main():
     train = train.fillna(train.mean())
     test = test.fillna(train.mean())
 
-    test_predictions = train_and_evaluate(train, test)
+    test_predictions, stats, feature_importances, explain_matrices, masks_ = train_and_evaluate(train, test)
 
 
 if __name__ == "__main__":
