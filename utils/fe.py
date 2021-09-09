@@ -181,6 +181,9 @@ def book_preprocessor(file_path):
     # int 64 to int 32
     int_cols = df.select_dtypes(include=[np.int64]).columns
     df[int_cols] = df[int_cols].astype(np.int32)
+    
+    # rebase seconds_in_bucket
+    df["seconds_in_bucket"] = df["seconds_in_bucket"] - df["seconds_in_bucket"].min()
 
     # Calculate seconds gap
     df["seconds_gap"] = df.groupby(["time_id"])["seconds_in_bucket"].apply(time_diff)
@@ -303,6 +306,9 @@ def trade_preprocessor(file_path):
     # int 64 to int 32
     int_cols = df.select_dtypes(include=[np.int64]).columns
     df[int_cols] = df[int_cols].astype(np.int32)
+    
+    # rebase seconds_in_bucket
+    df["seconds_in_bucket"] = df["seconds_in_bucket"] - df["seconds_in_bucket"].min()
 
     # Calculate seconds gap
     df["seconds_gap"] = df.groupby(["time_id"])["seconds_in_bucket"].apply(time_diff)
@@ -462,6 +468,9 @@ def agg_stat_features_by_clusters(df, n_clusters=7, function=np.nanmean, post_fi
         else:
             for postfix in postfixes:
                 merge_columns.append(column + "_" + postfix)
+
+    not_exist_columns = [column for column in merge_columns if column not in clusters_df.columns]
+    clusters_df[not_exist_columns] = 0
     df = pd.merge(df, clusters_df[merge_columns], how="left", on="time_id")
 
     return df
