@@ -1,0 +1,57 @@
+from dataset.dataset import get_train_val_loader, get_test_loader
+from config import Config
+
+
+def main():
+
+    config = Config(
+        0,
+        model_type="bert",
+        seed=42,
+        batch_size=8,
+        accumulation_steps=4
+    )
+
+    print("loading train val loader")
+    train_loader, val_loader = get_train_val_loader(config)
+
+    print("testing train val loader")
+    for idx, (cate_x, cate_mask, cont_x, cont_mask, target) in enumerate(train_loader):
+
+        print("category tensor shape {}".format(cate_x.shape))
+        print("category tensor shape {}".format(cate_mask.shape))
+        print("continuous tensor shape {}".format(cont_x.shape))
+        print("continuous tensor shape {}".format(cont_mask.shape))
+        print("target tensor shape {}".format(target.shape))
+
+        break
+
+    print("loading test loader")
+    test_loader = get_test_loader(config)
+
+    print("testing test loader")
+    for idx, (cate_x, cate_mask, cont_x, cont_mask, target) in enumerate(val_loader):
+
+        print("category tensor shape {}".format(cate_x.shape))
+        print("category tensor shape {}".format(cate_mask.shape))
+        print("continuous tensor shape {}".format(cont_x.shape))
+        print("continuous tensor shape {}".format(cont_mask.shape))
+        print("target tensor shape {}".format(target.shape))
+
+        break
+
+    for idx, (cate_x, cate_mask, cont_x, cont_mask, target) in enumerate(test_loader):
+
+        print("category tensor shape {}".format(cate_x.shape))
+        print("category tensor shape {}".format(cate_mask.shape))
+        print("continuous tensor shape {}".format(cont_x.shape))
+        print("continuous tensor shape {}".format(cont_mask.shape))
+        print("target tensor {}".format(target))
+
+        break
+
+    return
+
+
+if __name__ == "__main__":
+    main()

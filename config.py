@@ -1,4 +1,5 @@
 import os
+import glob
 
 
 class Config:
@@ -13,51 +14,42 @@ class Config:
 
         # data configs
         self.data_dir = "../input/optiver-realized-volatility-prediction/"
-        self.hist_window = 30
-        self.target_window = 7
-        self.train_data = os.path.join(self.data_dir,
-                                       "sz_index_daily_train_hist_{}_target_{}.csv".format(
-                                           self.hist_window,
-                                           self.target_window
-                                       ))
-        self.test_data = os.path.join(self.data_dir,
-                                      "sz_index_daily_test_hist_{}_target_{}.csv".format(
-                                          self.hist_window,
-                                          self.target_window
-                                      ))
-        self.cate_cols = []
-        self.cont_cols = []
-        for window in range(1, self.hist_window + 1):
-            self.cont_cols += [
-                "day_{}_before_close".format(window),
-                "day_{}_before_open".format(window),
-                "day_{}_before_high".format(window),
-                "day_{}_before_low".format(window),
-                "day_{}_before_pre_close".format(window),
-                "day_{}_before_change".format(window),
-                "day_{}_before_pct_chg".format(window),
-                "day_{}_before_vol".format(window),
-                "day_{}_before_amount".format(window),
-                "day_{}_before_total_mv".format(window),
-                "day_{}_before_float_mv".format(window),
-                "day_{}_before_total_share".format(window),
-                "day_{}_before_float_share".format(window),
-                "day_{}_before_free_share".format(window),
-                "day_{}_before_turnover_rate".format(window),
-                "day_{}_before_turnover_rate_f".format(window),
-                "day_{}_before_pe".format(window),
-                "day_{}_before_pe_ttm".format(window),
-                "day_{}_before_pb".format(window)
-            ]
+        self.hist_window = 600
+        self.train_data = os.path.join(self.data_dir, "train.csv")
+        self.train_order = glob.glob(os.path.join(self.data_dir, "book_train.parquet/*/*"))
+        self.train_trade = glob.glob(os.path.join(self.data_dir, "trade_train.parquet/*/*"))
+        self.test_data = os.path.join(self.data_dir, "test.csv")
+        self.test_order = glob.glob(os.path.join(self.data_dir, "book_test.parquet/*/*"))
+        self.test_trade = glob.glob(os.path.join(self.data_dir, "trade_test.parquet/*/*"))
+        
+        self.cate_cols = [
+            "stock_id"
+        ]
 
-        self.target_cols = []
-        for window in range(0, self.target_window):
-            self.target_cols += [
-                "day_{}_after_close".format(window),
-            ]
+        self.order_features = [
+            "bid_price1",
+            "ask_price1",
+            "bid_size1",
+            "ask_size1",
+            "bid_price2",
+            "ask_price2",
+            "bid_size2",
+            "ask_size2"
+        ]
+        self.trade_features = [
+            "price",
+            "size",
+            "order_count"
+        ]
+        self.cont_cols = self.order_features + self.trade_features
+
+        self.target_cols = [
+            "target"
+        ]
+        self.target_scale = 100
 
         # cross validation configs
-        self.split = "TimeSeriesSplit"
+        self.split = "GroupKFold"
         self.seed = seed
         self.n_splits = 5
         self.fold = fold
@@ -80,10 +72,8 @@ class Config:
         self.model_name = "QuantModel"
 
         # path, specify the path for saving model
-        self.checkpoint_pretrain = os.path.join("/media/jionie/my_disk/Kaggle/Tweet/pretrain",
-                                                self.model_name + "/" + self.model_type + "-" + str(self.seed)
-                                                + "/fold_0/pytorch_model.bin")
-        self.model_folder = os.path.join("/media/jionie/my_disk/Kaggle/Tweet/model", self.model_name)
+        self.checkpoint_pretrain = os.path.join("../ckpts/pretrain", self.model_name + "/" + self.model_type + "-" + str(self.seed) + "/fold_0/pytorch_model.bin")
+        self.model_folder = os.path.join("../ckpts/", self.model_name)
         if not os.path.exists(self.model_folder):
             os.mkdir(self.model_folder)
         self.checkpoint_folder_all_fold = os.path.join(self.model_folder, self.model_type + "-" + str(self.seed))
