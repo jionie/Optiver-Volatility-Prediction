@@ -1,5 +1,4 @@
 import os
-import glob
 
 
 class Config:
@@ -16,11 +15,11 @@ class Config:
         self.data_dir = "../input/optiver-realized-volatility-prediction/"
         self.hist_window = 600
         self.train_data = os.path.join(self.data_dir, "train.csv")
-        self.train_order = glob.glob(os.path.join(self.data_dir, "book_train.parquet/*/*"))
-        self.train_trade = glob.glob(os.path.join(self.data_dir, "trade_train.parquet/*/*"))
+        self.train_order = os.path.join(self.data_dir, "book_train.parquet")
+        self.train_trade = os.path.join(self.data_dir, "trade_train.parquet")
         self.test_data = os.path.join(self.data_dir, "test.csv")
-        self.test_order = glob.glob(os.path.join(self.data_dir, "book_test.parquet/*/*"))
-        self.test_trade = glob.glob(os.path.join(self.data_dir, "trade_test.parquet/*/*"))
+        self.test_order = os.path.join(self.data_dir, "book_test.parquet")
+        self.test_trade = os.path.join(self.data_dir, "trade_test.parquet")
         
         self.cate_cols = [
             "stock_id"

@@ -1,8 +1,9 @@
-from joblib import Parallel, delayed
+import os
+import gc
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold
-# from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder
 import torch
 from torch.utils.data import DataLoader, Dataset
 
@@ -16,17 +17,32 @@ class QuantDataset(Dataset):
         self.mode = mode
         if mode == "train":
             self.df = pd.read_csv(self.config.train_data)
+            other_df = pd.read_csv(self.config.test_data)
+            full_df = pd.concat([self.df, other_df], axis=0)
+
+            del other_df
+            gc.collect()
+
         else:
             self.df = pd.read_csv(self.config.test_data)
+            other_df = pd.read_csv(self.config.train_data)
+            full_df = pd.concat([self.df, other_df], axis=0)
 
-        self.order_books = None
-        self.trade_books = None
-        self.load_data()
+            del other_df
+            gc.collect()
 
         self.sample_indices = sample_indices
         self.seq_len = self.config.hist_window
 
         self.cate_cols = self.config.cate_cols
+        # label encoder transformation
+        self.df["stock_id_orig"] = self.df["stock_id"].copy()
+        full_df[self.cate_cols] = full_df[self.cate_cols].apply(LabelEncoder().fit_transform)
+        self.df[self.cate_cols] = full_df.iloc[:self.df.shape[0]][self.cate_cols].astype(np.int32)
+
+        del full_df
+        gc.collect()
+
         self.cont_cols = self.config.cont_cols
         self.target_cols = self.config.target_cols
 
@@ -39,7 +55,7 @@ class QuantDataset(Dataset):
         self.means_trade = torch.from_numpy(np.array([1.0, 100, 3.0]))
         self.stds_trade = torch.from_numpy(np.array([0.004, 153, 3.5]))
 
-    def load_data(self):
+    def load_data(self, stock_id):
 
         if self.mode == "train":
             order_path = self.config.train_order
@@ -53,9 +69,8 @@ class QuantDataset(Dataset):
             raise NotImplementedError
 
         def read_parquet_data(path):
-            stock_id = int(path.replace("\\", "/").split("=")[1].split("/")[0])
 
-            df = pd.read_parquet(path)
+            df = pd.read_parquet(os.path.join(path, "stock_id={}".format(int(stock_id))))
 
             # float 64 to float 32
             float_cols = df.select_dtypes(include=[np.float64]).columns
@@ -65,24 +80,16 @@ class QuantDataset(Dataset):
             int_cols = df.select_dtypes(include=[np.int64]).columns
             df[int_cols] = df[int_cols].astype(np.int32)
 
-            by_time = dict()
+            return df
 
-            for time_id in df.time_id.unique():
-                by_time[time_id] = df[df["time_id"] == time_id].reset_index(drop=True)
+        order_df = read_parquet_data(order_path)
+        trade_df = read_parquet_data(trade_path)
 
-            return {"stock_id": stock_id, "by_time": by_time}
+        return order_df, trade_df
 
-        # load order book
-        self.order_books = Parallel(n_jobs=-1, verbose=1)(delayed(read_parquet_data)(path) for path in order_path)
-        self.order_books = {item["stock_id"]: item["by_time"] for item in self.order_books}
+    def extract_book_features(self, df, time_id, features, normalize="standard"):
 
-        # load trade book
-        self.trade_books = Parallel(n_jobs=-1, verbose=1)(delayed(read_parquet_data)(path) for path in trade_path)
-        self.trade_books = {item["stock_id"]: item["by_time"] for item in self.trade_books}
-
-    def extract_book_features(self, data_dict, stock_id, time_id, features, normalize="standard"):
-
-        df = data_dict[stock_id][time_id]
+        df = df.loc[df["time_id"] == time_id]
 
         filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
         filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
@@ -95,18 +102,14 @@ class QuantDataset(Dataset):
         else:
             raise NotImplementedError
 
-        book_mask = torch.from_numpy(np.ones(self.seq_len))
+        return book_x
 
-        return book_x, book_mask
+    def extract_trade_features(self, df, time_id, features, normalize="standard"):
 
-    def extract_trade_features(self, data_dict, stock_id, time_id, features, normalize="standard"):
-
-        df = data_dict[stock_id][time_id]
+        df = df.loc[df["time_id"] == time_id]
 
         filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
         filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
-        trade_mask = torch.from_numpy(1 - (filled_df.isnull().astype(np.int32).sum(axis=1) >= 1)
-                                      .astype(np.int32).values)
         filled_df = filled_df.fillna(-1)
 
         if normalize == "standard":
@@ -116,36 +119,37 @@ class QuantDataset(Dataset):
         else:
             raise NotImplementedError
 
-        return trade_x, trade_mask
+        return trade_x
 
     def __getitem__(self, idx):
 
         indices = self.sample_indices[idx]
         row = self.df.iloc[indices]
 
-        book_x, book_mask = self.extract_book_features(self.order_books, row.stock_id, row.time_id,
-                                                       self.config.order_features)
+        # load parquet
+        order_df, trade_df = self.load_data(row.stock_id_orig)
+
+        # continuous features
+        book_x = self.extract_book_features(order_df, row.time_id, self.config.order_features)
         try:
-            trade_x, trade_mask = self.extract_trade_features(self.trade_books, row.stock_id, row.time_id,
-                                                              self.config.trade_features)
+            trade_x = self.extract_trade_features(trade_df, row.time_id, self.config.trade_features)
         except Exception as e:
             trade_x = -torch.ones((self.seq_len, len(self.config.trade_features)))
-            trade_mask = torch.zeros(self.seq_len)
 
         cont_x = torch.cat([book_x, trade_x], dim=1)
-        cont_mask = torch.cat([book_mask, trade_mask], dim=1)
 
-        # should we use label encoder here???
-        cate_x = torch.from_numpy(row[self.cate_cols].values)
-        cate_mask = torch.ones_like(cate_x)
+        # category feature
+        cate_x = torch.from_numpy(row[self.cate_cols].values.astype(np.int32))
 
+        # mask
+        mask = torch.from_numpy(np.ones(self.seq_len))
         # should we use relative target gain???
         if self.mode == "test":
             target = torch.ones(len(self.target_cols))
         else:
             target = torch.from_numpy(row[self.target_cols].values * self.config.target_scale)
 
-        return cate_x, cate_mask, cont_x, cont_mask, target
+        return cate_x, cont_x, mask, target
 
     def __len__(self):
         return len(self.sample_indices)
@@ -157,8 +161,11 @@ def get_train_val_loader(config):
     else:
         raise NotImplementedError
 
-    train_loader, val_loader = None, None
+    # load data
     df = pd.read_csv(config.train_data)
+
+    # kfold
+    train_loader, val_loader = None, None
     for fold, (train_index, val_index) in enumerate(kfold.split(df, groups=df["time_id"])):
         if fold != config.fold:
             continue
@@ -180,14 +187,14 @@ def get_train_val_loader(config):
     return train_loader, val_loader
 
 
-def get_test_loader(config, online=False):
+def get_test_loader(config):
+
+    # load data
     df = pd.read_csv(config.test_data)
 
+    # infer dataset
     test_index = range(df.shape[0])
-    if online:
-        test_dataset = QuantDataset(config, test_index, mode="test")
-    else:
-        test_dataset = QuantDataset(config, test_index, mode="train")
+    test_dataset = QuantDataset(config, test_index, mode="test")
 
     test_loader = DataLoader(test_dataset,
                              batch_size=config.val_batch_size,
