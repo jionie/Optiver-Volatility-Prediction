@@ -139,7 +139,8 @@ class QuantDataset(Dataset):
         cont_x = torch.cat([book_x, trade_x], dim=1)
 
         # category feature
-        cate_x = torch.from_numpy(row[self.cate_cols].values.astype(np.int32))
+        cate_x = torch.repeat_interleave(torch.from_numpy(row[self.cate_cols].values.astype(np.int32)).unsqueeze(0),
+                                         self.seq_len, dim=0)
 
         # mask
         mask = torch.from_numpy(np.ones(self.seq_len))

@@ -24,6 +24,7 @@ class Config:
         self.cate_cols = [
             "stock_id"
         ]
+        self.total_cate_size = 112  # 112 stocks in total
 
         self.order_features = [
             "bid_price1",
@@ -69,6 +70,12 @@ class Config:
         # model
         self.model_type = model_type
         self.model_name = "QuantModel"
+        self.emb_size = 128
+        self.hidden_size = 512
+        self.target_size = len(self.target_cols)
+        self.dropout = 0.2
+        self.num_hidden_layers = 3
+        self.num_attention_heads = 8
 
         # path, specify the path for saving model
         self.checkpoint_pretrain = os.path.join("../ckpts/pretrain", self.model_name + "/" + self.model_type + "-" + str(self.seed) + "/fold_0/pytorch_model.bin")

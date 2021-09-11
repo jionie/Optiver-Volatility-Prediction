@@ -1,14 +1,13 @@
 import torch
 import torch.nn as nn
-from transformers import BertConfig, BertEncoder
+from transformers.models.bert.modeling_bert import BertConfig, BertEncoder
 
 
 class TransfomerModel(nn.Module):
     def __init__(self, config):
         super(TransfomerModel, self).__init__()
 
-        self.config = config
-
+        self.seq_len = config.hist_window
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
 
@@ -36,8 +35,8 @@ class TransfomerModel(nn.Module):
         self.config = BertConfig(
             vocab_size=3,  # not used
             hidden_size=config.hidden_size,
-            num_hidden_layers=config.nlayers,
-            num_attention_heads=config.nheads,
+            num_hidden_layers=config.num_hidden_layers,
+            num_attention_heads=config.num_attention_heads,
             intermediate_size=config.hidden_size,
             hidden_dropout_prob=config.dropout,
             attention_probs_dropout_prob=config.dropout,
@@ -67,7 +66,7 @@ class TransfomerModel(nn.Module):
         cont_emb = self.cont_emb(cont_x)
 
         if cate_x is not None:
-            cate_emb = self.cate_emb(cate_x).view(batch_size, self.config.seq_len, -1)
+            cate_emb = self.cate_emb(cate_x).view(batch_size, self.seq_len, -1)
             cate_emb = self.cate_proj(cate_emb)
 
             seq_emb = torch.cat([cate_emb, cont_emb], 2)
@@ -91,7 +90,9 @@ class TransfomerModel(nn.Module):
 class LSTMATTNModel(nn.Module):
     def __init__(self, config):
         super(LSTMATTNModel, self).__init__()
-        self.config = config
+
+        self.seq_len = config.hist_window
+
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
         self.cate_emb = nn.Embedding(config.total_cate_size, config.emb_size, padding_idx=0)
@@ -116,7 +117,7 @@ class LSTMATTNModel(nn.Module):
             vocab_size=3,  # not used
             hidden_size=config.hidden_size,
             num_hidden_layers=1,
-            num_attention_heads=config.nheads,
+            num_attention_heads=config.num_attention_heads,
             intermediate_size=config.hidden_size,
             hidden_dropout_prob=config.dropout,
             attention_probs_dropout_prob=config.dropout,
@@ -145,7 +146,7 @@ class LSTMATTNModel(nn.Module):
         cont_emb = self.cont_emb(cont_x)
 
         if cate_x is not None:
-            cate_emb = self.cate_emb(cate_x).view(batch_size, self.config.seq_len, -1)
+            cate_emb = self.cate_emb(cate_x).view(batch_size, self.seq_len, -1)
             cate_emb = self.cate_proj(cate_emb)
 
             seq_emb = torch.cat([cate_emb, cont_emb], 2)
