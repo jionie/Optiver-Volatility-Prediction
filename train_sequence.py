@@ -10,7 +10,6 @@ import numpy as np
 
 # import pytorch related libraries
 import torch
-from audtorch.metrics.functional import pearsonr
 from tensorboardX import SummaryWriter
 from transformers import get_cosine_schedule_with_warmup, get_linear_schedule_with_warmup, \
     get_constant_schedule_with_warmup, AdamW
@@ -21,8 +20,9 @@ from dataset.dataset import get_train_val_loader, get_test_loader
 # import utils
 from utils.ranger import Ranger
 from utils.lrs_scheduler import WarmRestart
-from utils.metric import pearson_correlation, spearman_correlation
+from utils.metric import rmspe
 from utils.file import Logger
+from utils.loss_function import RMSPELoss
 
 # import model
 from models.transformer import TransfomerModel, LSTMATTNModel
@@ -259,7 +259,7 @@ class Quant:
                 continue
             try:
                 state_dict[key] = model_state_dict[key]
-            except:
+            except Exception as e:
                 print("Missing key:", key)
 
         if self.config.data_parallel:
@@ -322,7 +322,6 @@ class Quant:
         self.log.write("\ndevice num: {}".format(self.num_device))
         self.log.write("\noptimizer: {}".format(self.optimizer))
         self.log.write("\nreuse model: {}".format(self.config.reuse_model))
-        self.log.write("\nadversarial training: {}".format(self.config.adversarial))
         if self.config.reuse_model:
             self.log.write("\nModel restored from {}.".format(self.config.load_point))
         self.log.write("\n")
@@ -334,10 +333,11 @@ class Quant:
                                                                        self.config.accumulation_steps))
         self.log.write("   experiment  = %s\n" % str(__file__.split("/")[-2:]))
 
+        criterion = RMSPELoss()
+
         while self.epoch <= self.config.num_epoch:
 
-            self.train_pearson = []
-            self.train_spearman = []
+            self.train_rmspe = []
 
             # update lr and start from start_epoch
             if (self.epoch >= 1) and (not self.lr_scheduler_each_iter) \
@@ -365,19 +365,19 @@ class Quant:
 
                 # set input to cuda mode
                 if cate_x is not None:
-                    cate_x = cate_x.to(self.config.device)
-                cont_x = cont_x.to(self.config.device)
-                mask = mask.to(self.config.device)
-                target = target.to(self.config.device)
+                    cate_x = cate_x.to(self.config.device).long()
+                cont_x = cont_x.to(self.config.device).float()
+                mask = mask.to(self.config.device).float()
+                target = target.to(self.config.device).float()
 
                 outputs = self.model(cate_x, cont_x, mask)
 
                 if self.config.apex:
                     with torch.cuda.amp.autocast():
-                        loss = pearsonr(outputs, target)
+                        loss = criterion(outputs, target)
                     self.scaler.scale(loss).backward()
                 else:
-                    loss = pearsonr(outputs, target)
+                    loss = criterion(outputs, target)
                     loss.backward()
 
                 if (tr_batch_i + 1) % self.config.accumulation_steps == 0:
@@ -410,8 +410,7 @@ class Quant:
 
                 outputs = to_numpy(outputs)
                 target = to_numpy(target)
-                self.train_pearson.append(pearson_correlation(outputs, target))
-                self.train_spearman.append(spearman_correlation(outputs, target))
+                self.train_rmspe.append(rmspe(outputs, target))
 
                 sum_train_loss = sum_train_loss + np.array([loss.item() * self.config.batch_size])
                 sum_train = sum_train + np.array([self.config.batch_size])
@@ -421,12 +420,11 @@ class Quant:
                     train_loss = sum_train_loss / (sum_train + 1e-12)
                     sum_train_loss[...] = 0
                     sum_train[...] = 0
-                    mean_train_pearson = np.mean(self.train_pearson)
-                    mean_train_spearman = np.mean(self.train_spearman)
+                    mean_train_rmspe = np.mean(self.train_rmspe)
 
                     self.log.write(
-                        "lr: {} train loss: {} train_pearson: {} train_spearman: {} \n"
-                            .format(rate, train_loss[0], mean_train_pearson, mean_train_spearman)
+                        "lr: {} train loss: {} train_rmspe: {} \n"
+                            .format(rate, train_loss[0], mean_train_rmspe)
                     )
 
                 if (tr_batch_i + 1) % self.eval_step == 0:
@@ -444,8 +442,9 @@ class Quant:
         valid_loss = np.zeros(1, np.float32)
         valid_num = np.zeros_like(valid_loss)
 
-        self.eval_pearson = []
-        self.eval_spearman = []
+        criterion = RMSPELoss()
+
+        self.eval_rmspe = []
 
         with torch.no_grad():
 
@@ -459,13 +458,13 @@ class Quant:
 
                 # set input to cuda mode
                 if cate_x is not None:
-                    cate_x = cate_x.to(self.config.device)
-                cont_x = cont_x.to(self.config.device)
-                mask = mask.to(self.config.device)
-                target = target.to(self.config.device)
+                    cate_x = cate_x.to(self.config.device).long()
+                cont_x = cont_x.to(self.config.device).float()
+                mask = mask.to(self.config.device).float()
+                target = target.to(self.config.device).float()
 
                 outputs = self.model(cate_x, cont_x, mask)
-                loss = pearsonr(outputs, target)
+                loss = criterion(outputs, target)
 
                 self.writer.add_scalar("val_loss_" + str(self.config.fold), loss.item(), (self.eval_count - 1) * len(
                     self.val_data_loader) * self.config.val_batch_size + val_batch_i * self.config.val_batch_size)
@@ -475,30 +474,28 @@ class Quant:
 
                 outputs = to_numpy(outputs)
                 target = to_numpy(target)
-                self.eval_pearson.append(pearson_correlation(outputs, target))
-                self.eval_spearman.append(spearman_correlation(outputs, target))
+                self.eval_rmspe.append(rmspe(outputs, target))
 
                 valid_loss = valid_loss + np.array([loss.item() * self.config.val_batch_size])
                 valid_num = valid_num + np.array([self.config.val_batch_size])
 
             valid_loss = valid_loss / valid_num
-            mean_eval_pearson = np.mean(self.eval_pearson)
-            mean_eval_spearman = np.mean(self.eval_spearman)
+            mean_eval_rmspe = np.mean(self.eval_rmspe)
 
             self.log.write(
-                "validation loss: {} eval_pearson: {} eval_spearman: {}\n"
-                    .format(valid_loss[0], mean_eval_pearson, mean_eval_spearman)
+                "validation loss: {} eval_rmspe: {} \n"
+                    .format(valid_loss[0], mean_eval_rmspe)
             )
 
         if self.config.lr_scheduler_name == "ReduceLROnPlateau":
-            self.scheduler.step(mean_eval_pearson)
+            self.scheduler.step(mean_eval_rmspe)
 
-        if mean_eval_pearson >= self.valid_metric_optimal:
+        if mean_eval_rmspe >= self.valid_metric_optimal:
 
             self.log.write("Validation metric improved ({:.6f} --> {:.6f}).  Saving model ...".format(
-                self.valid_metric_optimal, mean_eval_pearson))
+                self.valid_metric_optimal, mean_eval_rmspe))
 
-            self.valid_metric_optimal = mean_eval_pearson
+            self.valid_metric_optimal = mean_eval_rmspe
             self.save_check_point()
 
             self.count = 0
@@ -511,6 +508,8 @@ class Quant:
         self.eval_count += 1
         test_loss = np.zeros(1, np.float32)
         test_num = np.zeros_like(test_loss)
+
+        criterion = RMSPELoss()
 
         self.test_pearson = []
         self.test_spearman = []
@@ -528,48 +527,18 @@ class Quant:
 
                 # set input to cuda mode
                 if cate_x is not None:
-                    cate_x = cate_x.to(self.config.device)
-                cont_x = cont_x.to(self.config.device)
-                mask = mask.to(self.config.device)
-                target = target.to(self.config.device)
+                    cate_x = cate_x.to(self.config.device).long()
+                cont_x = cont_x.to(self.config.device).float()
+                mask = mask.to(self.config.device).float()
 
                 outputs = self.model(cate_x, cont_x, mask)
 
                 def to_numpy(tensor):
                     return tensor.detach().cpu().numpy()
 
-                if not online:
+                predictions.append(to_numpy(outputs))
 
-                    loss = pearsonr(outputs, target)
-
-                    self.writer.add_scalar("test_loss_" + str(self.config.fold), loss.item(),
-                                           (self.eval_count - 1) * len(
-                                               self.test_data_loader) * self.config.val_batch_size + test_batch_i * self.config.val_batch_size)
-
-                    outputs = to_numpy(outputs)
-                    target = to_numpy(target)
-                    self.test_pearson.append(pearson_correlation(outputs, target))
-                    self.test_spearman.append(spearman_correlation(outputs, target))
-
-                    test_loss = test_loss + np.array([loss.item() * self.config.val_batch_size])
-                    test_num = test_num + np.array([self.config.val_batch_size])
-
-                else:
-                    predictions.append(to_numpy(outputs))
-
-            if not online:
-                test_loss = test_loss / test_num
-                mean_test_pearson = np.mean(self.test_pearson)
-                mean_test_spearman = np.mean(self.test_spearman)
-
-                self.log.write(
-                    "test loss: {} test_pearson: {} test_spearman: {}\n"
-                        .format(test_loss[0], mean_test_pearson, mean_test_spearman)
-                )
-                return None
-
-            else:
-                return np.concatenate(predictions, axis=0)
+            return np.concatenate(predictions, axis=0)
 
 
 if __name__ == "__main__":

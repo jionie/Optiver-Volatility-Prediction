@@ -1,11 +1,6 @@
-from scipy.stats import pearsonr, spearmanr
+import numpy as np
 
 
-def pearson_correlation(pred, label):
-    correlation, p_value = pearsonr(pred, label)
-    return correlation, p_value
-
-
-def spearman_correlation(pred, label):
-    correlation, p_value = spearmanr(pred, label)
-    return correlation, p_value
+def rmspe(y_true, y_pred):
+    y_pred = np.clip(y_pred, 0, None)
+    return np.sqrt(np.mean(np.square((y_true - y_pred) / y_true)))
