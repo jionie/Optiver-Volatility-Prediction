@@ -429,7 +429,6 @@ class Quant:
 
                 if (tr_batch_i + 1) % self.eval_step == 0:
                     self.evaluate_op()
-                    self.test_op(online=False)
 
             if self.count >= self.config.early_stopping:
                 break
