@@ -48,6 +48,7 @@ class Config:
             "target"
         ]
         self.target_scale = 100
+        self.normalize = "standard"
 
         # cross validation configs
         self.split = "GroupKFold"
@@ -75,7 +76,7 @@ class Config:
         self.hidden_size = 512
         self.target_size = len(self.target_cols)
         self.dropout = 0.2
-        self.num_hidden_layers = 3
+        self.num_hidden_layers = 2
         self.num_attention_heads = 8
 
         # path, specify the path for saving model
@@ -108,7 +109,7 @@ class Config:
         self.warmup_steps = 200
 
         # lr
-        self.max_lr = 1e-5
+        self.max_lr = 1e-3
         self.min_lr = 1e-5
         self.lr = 2e-4
         self.weight_decay = 0.001
@@ -116,7 +117,7 @@ class Config:
         # gradient accumulation
         self.accumulation_steps = accumulation_steps
         # epochs
-        self.num_epoch = 8
+        self.num_epoch = 30
         # saving rate
         self.saving_rate = 1 / 3
         # early stopping

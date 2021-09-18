@@ -97,7 +97,7 @@ class Quant:
         self.epoch = 0
         self.finished = False
         self.valid_epoch = 0
-        self.train_loss, self.valid_loss, self.valid_metric_optimal = float("-inf"), float("-inf"), float("-inf")
+        self.train_loss, self.valid_loss, self.valid_metric_optimal = float("inf"), float("inf"), float("inf")
         self.writer = SummaryWriter()
 
         # eval setting
@@ -145,42 +145,42 @@ class Quant:
 
         param_optimizer = list(self.model.named_parameters())
 
-        def is_backbone(n):
-            prefix = "bert"
-            return prefix in n
-
-        def is_cross_attention(n):
-            cross_attention = "cross_attention"
-            return cross_attention in n
+        # def is_backbone(n):
+        #     prefix = "bert"
+        #     return prefix in n
+        #
+        # def is_cross_attention(n):
+        #     cross_attention = "cross_attention"
+        #     return cross_attention in n
 
         no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-        self.optimizer_grouped_parameters = [
-            {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_backbone(n)],
-             "lr": self.config.min_lr,
-             "weight_decay": self.config.weight_decay},
-            {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_cross_attention(n)],
-             "lr": self.config.max_lr,
-             "weight_decay": self.config.weight_decay},
-            {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and not is_backbone(n)
-                        and not is_cross_attention(n)],
-             "lr": self.config.lr,
-             "weight_decay": self.config.weight_decay},
-            {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and is_backbone(n)],
-             "lr": self.config.min_lr,
-             "weight_decay": 0.0},
-            {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and is_cross_attention(n)],
-             "lr": self.config.max_lr,
-             "weight_decay": 0.0},
-            {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and not is_backbone(n)
-                        and not is_cross_attention(n)],
-             "lr": self.config.lr,
-             "weight_decay": 0.0}
-        ]
         # self.optimizer_grouped_parameters = [
-        #     {"params": [p for n, p in param_optimizer],
+        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_backbone(n)],
         #      "lr": self.config.min_lr,
-        #      "weight_decay": 0}
+        #      "weight_decay": self.config.weight_decay},
+        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_cross_attention(n)],
+        #      "lr": self.config.max_lr,
+        #      "weight_decay": self.config.weight_decay},
+        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and not is_backbone(n)
+        #                 and not is_cross_attention(n)],
+        #      "lr": self.config.lr,
+        #      "weight_decay": self.config.weight_decay},
+        #     {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and is_backbone(n)],
+        #      "lr": self.config.min_lr,
+        #      "weight_decay": 0.0},
+        #     {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and is_cross_attention(n)],
+        #      "lr": self.config.max_lr,
+        #      "weight_decay": 0.0},
+        #     {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and not is_backbone(n)
+        #                 and not is_cross_attention(n)],
+        #      "lr": self.config.lr,
+        #      "weight_decay": 0.0}
         # ]
+        self.optimizer_grouped_parameters = [
+            {"params": [p for n, p in param_optimizer],
+             "lr": self.config.max_lr,
+             "weight_decay": 0}
+        ]
 
     def prepare_optimizer(self):
 
@@ -489,7 +489,7 @@ class Quant:
         if self.config.lr_scheduler_name == "ReduceLROnPlateau":
             self.scheduler.step(mean_eval_rmspe)
 
-        if mean_eval_rmspe >= self.valid_metric_optimal:
+        if mean_eval_rmspe <= self.valid_metric_optimal:
 
             self.log.write("Validation metric improved ({:.6f} --> {:.6f}).  Saving model ...".format(
                 self.valid_metric_optimal, mean_eval_rmspe))

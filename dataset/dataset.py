@@ -1,5 +1,7 @@
+import os
 import gc
 from tqdm import tqdm
+from joblib import dump, load
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold
@@ -15,55 +17,65 @@ class QuantDataset(Dataset):
 
         # load data df
         self.mode = mode
-        if mode == "train":
-            self.df = pd.read_csv(self.config.train_data)
+        if mode == "train" or mode == "val":
+            df = pd.read_csv(self.config.train_data)
             other_df = pd.read_csv(self.config.test_data)
-            full_df = pd.concat([self.df, other_df], axis=0)
+            full_df = pd.concat([df, other_df], axis=0)
 
             del other_df
             gc.collect()
 
         else:
-            self.df = pd.read_csv(self.config.test_data)
+            df = pd.read_csv(self.config.test_data)
             other_df = pd.read_csv(self.config.train_data)
-            full_df = pd.concat([self.df, other_df], axis=0)
+            full_df = pd.concat([df, other_df], axis=0)
 
             del other_df
             gc.collect()
 
         self.sample_indices = sample_indices
-        self.time_ids = self.df["time_id"].iloc[self.sample_indices].to_list()
-
-        self.order_books = None
-        self.trade_books = None
-        self.load_data()
+        self.valid_time_ids = df["time_id"].iloc[self.sample_indices].to_list()
 
         self.seq_len = self.config.hist_window
 
+        self.means_order = np.array([0.9997, 1.0003, 769.9902, 766.7346, 0.9995, 1.0005, 959.3417, 928.2203])
+        self.stds_order = np.array([3.6881e-03, 3.6871e-03, 5.3541e+03, 4.9549e+03, 3.7009e-03, 3.6991e-03, 6.6838e+03,
+                                    5.7353e+03])
+
+        self.means_trade = np.array([1.0, 100, 3.0])
+        self.stds_trade = np.array([0.004, 153, 3.5])
+
+        # cont_x init
+        self.order_books = None
+        self.trade_books = None
+        self.cont_cols = self.config.cont_cols
+        self.load_data()
+
+        # store stock_id and time_id
+        self.stock_ids = df["stock_id"].values
+        self.time_ids = df["time_id"].values
+
+        # cate_x init
         self.cate_cols = self.config.cate_cols
         # label encoder transformation
-        self.df["stock_id_orig"] = self.df["stock_id"].copy()
         full_df[self.cate_cols] = full_df[self.cate_cols].apply(LabelEncoder().fit_transform)
-        self.df[self.cate_cols] = full_df.iloc[:self.df.shape[0]][self.cate_cols].astype(np.int32)
+        df[self.cate_cols] = full_df.iloc[:df.shape[0]][self.cate_cols].astype(np.int32)
 
         del full_df
         gc.collect()
+        self.cate_x = df[self.cate_cols].values
 
-        self.cont_cols = self.config.cont_cols
-        self.target_cols = self.config.target_cols
-
-        self.means_order = torch.from_numpy(np.array([0.9997, 1.0003, 769.9902, 766.7346, 0.9995, 1.0005, 959.3417,
-                                                      928.2203]))
-        self.stds_order = torch.from_numpy(
-            np.array([3.6881e-03, 3.6871e-03, 5.3541e+03, 4.9549e+03, 3.7009e-03, 3.6991e-03,
-                      6.6838e+03, 5.7353e+03]))
-
-        self.means_trade = torch.from_numpy(np.array([1.0, 100, 3.0]))
-        self.stds_trade = torch.from_numpy(np.array([0.004, 153, 3.5]))
+        # target
+        if mode == "train" or mode == "val":
+            self.target = df[self.config.target_cols].values
+        elif mode == "test":
+            self.target = None
+        else:
+            raise NotImplementedError
 
     def load_data(self):
 
-        if self.mode == "train":
+        if self.mode == "train" or self.mode == "val":
             order_path = self.config.train_order
             trade_path = self.config.train_trade
 
@@ -75,110 +87,124 @@ class QuantDataset(Dataset):
             raise NotImplementedError
 
         # load order book
-        self.order_books = dict()
-        for path in tqdm(order_path):
+        order_books_path = os.path.join(self.config.data_dir, "order_book_seed_{}_fold_{}_{}.pkl"
+                                        .format(self.config.seed, self.config.fold, self.mode))
 
-            stock_id = int(path.replace("\\", "/").split("=")[1].split("/")[0])
-            book_df = pd.read_parquet(path)
-            book_df = book_df.loc[book_df["time_id"].isin(self.time_ids)]
+        if os.path.exists(order_books_path):
+            self.order_books = load(order_books_path)
 
-            # float 64 to float 32
-            float_cols = book_df.select_dtypes(include=[np.float64]).columns
-            book_df[float_cols] = book_df[float_cols].astype(np.float32)
+        else:
 
-            # int 64 to int 32
-            int_cols = book_df.select_dtypes(include=[np.int64]).columns
-            book_df[int_cols] = book_df[int_cols].astype(np.int32)
+            self.order_books = dict()
+            for path in tqdm(order_path):
 
-            book_by_time = dict()
-            for time_id in book_df.time_id.unique():
-                book_by_time[time_id] = book_df[book_df["time_id"] == time_id].reset_index(drop=True)
+                stock_id = int(path.replace("\\", "/").split("=")[1].split("/")[0])
+                book_df = pd.read_parquet(path)
+                book_df = book_df.loc[book_df["time_id"].isin(self.valid_time_ids)]
 
-            self.order_books[stock_id] = book_by_time
+                # float 64 to float 32
+                float_cols = book_df.select_dtypes(include=[np.float64]).columns
+                book_df[float_cols] = book_df[float_cols].astype(np.float32)
+
+                # int 64 to int 32
+                int_cols = book_df.select_dtypes(include=[np.int64]).columns
+                book_df[int_cols] = book_df[int_cols].astype(np.int32)
+
+                book_by_time = dict()
+                for time_id in book_df.time_id.unique():
+
+                    df = book_df[book_df["time_id"] == time_id].reset_index(drop=True)
+                    filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
+                    filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
+                    filled_df = filled_df.fillna(method="ffill")
+                    filled_df = filled_df[self.config.order_features].values
+
+                    if self.config.normalize == "standard":
+                        filled_df = (filled_df - self.means_order) / self.stds_order
+                    elif self.config.normalize == "log1p":
+                        filled_df = np.log1p(filled_df)
+                    else:
+                        raise NotImplementedError
+
+                    book_by_time[time_id] = filled_df
+
+                self.order_books[stock_id] = book_by_time
+
+            with open(order_books_path, "wb") as f:
+                dump(self.order_books, f)
 
         # load trade book
-        self.trade_books = dict()
-        for path in tqdm(trade_path):
+        trade_books_path = os.path.join(self.config.data_dir, "trade_book_seed_{}_fold_{}_{}.pkl"
+                                        .format(self.config.seed, self.config.fold, self.mode))
 
-            stock_id = int(path.replace("\\", "/").split("=")[1].split("/")[0])
-            trade_df = pd.read_parquet(path)
-            trade_df = trade_df.loc[trade_df["time_id"].isin(self.time_ids)]
+        if os.path.exists(trade_books_path):
+            self.trade_books = load(trade_books_path)
 
-            # float 64 to float 32
-            float_cols = trade_df.select_dtypes(include=[np.float64]).columns
-            trade_df[float_cols] = trade_df[float_cols].astype(np.float32)
-
-            # int 64 to int 32
-            int_cols = trade_df.select_dtypes(include=[np.int64]).columns
-            trade_df[int_cols] = trade_df[int_cols].astype(np.int32)
-
-            trade_by_time = dict()
-            for time_id in trade_df.time_id.unique():
-                trade_by_time[time_id] = trade_df[trade_df["time_id"] == time_id].reset_index(drop=True)
-
-            self.trade_books[stock_id] = trade_by_time
-
-    def extract_book_features(self, data_dict, stock_id, time_id, features, normalize="standard"):
-
-        df = data_dict[stock_id][time_id]
-
-        filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
-        filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
-        filled_df = filled_df.fillna(method="ffill")
-
-        if normalize == "standard":
-            book_x = (torch.from_numpy(filled_df[features].values) - self.means_order) / self.stds_order
-        elif normalize == "log1p":
-            book_x = torch.from_numpy(np.log1p(filled_df[features].values))
         else:
-            raise NotImplementedError
+            self.trade_books = dict()
+            for path in tqdm(trade_path):
 
-        return book_x
+                stock_id = int(path.replace("\\", "/").split("=")[1].split("/")[0])
+                trade_df = pd.read_parquet(path)
+                trade_df = trade_df.loc[trade_df["time_id"].isin(self.valid_time_ids)]
 
-    def extract_trade_features(self, data_dict, stock_id,  time_id, features, normalize="standard"):
+                # float 64 to float 32
+                float_cols = trade_df.select_dtypes(include=[np.float64]).columns
+                trade_df[float_cols] = trade_df[float_cols].astype(np.float32)
 
-        df = data_dict[stock_id][time_id]
+                # int 64 to int 32
+                int_cols = trade_df.select_dtypes(include=[np.int64]).columns
+                trade_df[int_cols] = trade_df[int_cols].astype(np.int32)
 
-        filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
-        filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
-        filled_df = filled_df.fillna(0)
+                trade_by_time = dict()
+                for time_id in trade_df.time_id.unique():
 
-        if normalize == "standard":
-            trade_x = (torch.from_numpy(filled_df[features].values) - self.means_order) / self.stds_order
-        elif normalize == "log1p":
-            trade_x = torch.from_numpy(np.log1p(filled_df[features].values))
-        else:
-            raise NotImplementedError
+                    df = trade_df[trade_df["time_id"] == time_id].reset_index(drop=True)
+                    filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
+                    filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
+                    filled_df = filled_df.fillna(0)
+                    filled_df = filled_df[self.config.trade_features].values
 
-        return trade_x
+                    if self.config.normalize == "standard":
+                        filled_df = (filled_df - self.means_trade) / self.stds_trade
+                    elif self.config.normalize == "log1p":
+                        filled_df = np.log1p(filled_df)
+                    else:
+                        raise NotImplementedError
+
+                    trade_by_time[time_id] = filled_df
+
+                self.trade_books[stock_id] = trade_by_time
+
+            with open(trade_books_path, "wb") as f:
+                dump(self.trade_books, f)
 
     def __getitem__(self, idx):
 
         indices = self.sample_indices[idx]
-        row = self.df.iloc[indices]
 
         # continuous features
-        book_x = self.extract_book_features(self.order_books, row.stock_id_orig, row.time_id,
-                                            self.config.order_features)
+        book_x = torch.from_numpy(self.order_books[self.stock_ids[indices]][self.time_ids[indices]])
+
         try:
-            trade_x = self.extract_trade_features(self.trade_books, row.stock_id_orig, row.time_id,
-                                                  self.config.trade_features)
+            trade_x = torch.from_numpy(self.trade_books[self.stock_ids[indices]][self.time_ids[indices]])
+
         except Exception as e:
-            trade_x = -torch.ones((self.seq_len, len(self.config.trade_features)))
+            trade_x = torch.zeros((self.seq_len, len(self.config.trade_features)))
 
         cont_x = torch.cat([book_x, trade_x], dim=1)
 
         # category feature
-        cate_x = torch.repeat_interleave(torch.from_numpy(row[self.cate_cols].values.astype(np.int32)).unsqueeze(0),
+        cate_x = torch.repeat_interleave(torch.from_numpy(self.cate_x[indices].astype(np.int32)).unsqueeze(0),
                                          self.seq_len, dim=0)
 
         # mask
         mask = torch.from_numpy(np.ones(self.seq_len))
         # should we use relative target gain???
         if self.mode == "test":
-            target = torch.ones(len(self.target_cols))
+            target = torch.ones(len(self.config.target_cols))
         else:
-            target = torch.from_numpy(row[self.target_cols].values * self.config.target_scale)
+            target = torch.from_numpy(self.target[indices] * self.config.target_scale)
 
         return cate_x, cont_x, mask, target
 
@@ -195,6 +221,9 @@ def get_train_val_loader(config):
     # load data
     df = pd.read_csv(config.train_data)
 
+    # shuffle by random seed
+    df = df.sample(frac=1, random_state=config.seed).reset_index(drop=True)
+
     # kfold
     train_loader, val_loader = None, None
     for fold, (train_index, val_index) in enumerate(kfold.split(df, groups=df["time_id"])):
@@ -202,7 +231,7 @@ def get_train_val_loader(config):
             continue
         else:
             train_dataset = QuantDataset(config, train_index, mode="train")
-            val_dataset = QuantDataset(config, val_index, mode="train")
+            val_dataset = QuantDataset(config, val_index, mode="val")
             train_loader = DataLoader(train_dataset,
                                       batch_size=config.batch_size,
                                       num_workers=config.num_workers,
