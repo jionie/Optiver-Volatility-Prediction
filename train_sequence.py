@@ -34,7 +34,7 @@ parser = argparse.ArgumentParser(description="arg parser")
 parser.add_argument("--fold", type=int, default=0, required=False, help="specify the fold for training")
 parser.add_argument("--model_type", type=str, default="bert", required=False, help="specify the model type")
 parser.add_argument("--seed", type=int, default=2020, required=False, help="specify the seed")
-parser.add_argument("--batch_size", type=int, default=16, required=False, help="specify the batch size")
+parser.add_argument("--batch_size", type=int, default=64, required=False, help="specify the batch size")
 parser.add_argument("--accumulation_steps", type=int, default=1, required=False, help="specify the accumulation_steps")
 
 
@@ -83,11 +83,11 @@ class Quant:
     def load_data(self):
         self.log.write("\nLoading data...")
 
-        self.test_data_loader = get_test_loader(
+        self.train_data_loader, self.val_data_loader = get_train_val_loader(
             self.config
         )
 
-        self.train_data_loader, self.val_data_loader = get_train_val_loader(
+        self.test_data_loader = get_test_loader(
             self.config
         )
 
@@ -112,7 +112,7 @@ class Quant:
             self.model = TransfomerModel(self.config).to(self.config.device)
 
         elif self.config.model_type == "lstm":
-            self.mdoel = LSTMATTNModel(self.config).to(self.config.device)
+            self.model = LSTMATTNModel(self.config).to(self.config.device)
 
         else:
             raise NotImplementedError
@@ -141,7 +141,7 @@ class Quant:
             else:
                 self.model.load_state_dict(state_dict)
 
-    def differential_lr(self):
+    def differential_lr(self, warmup=True):
 
         param_optimizer = list(self.model.named_parameters())
 
@@ -153,12 +153,13 @@ class Quant:
         #     cross_attention = "cross_attention"
         #     return cross_attention in n
 
-        no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
+        # no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
         # self.optimizer_grouped_parameters = [
         #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_backbone(n)],
         #      "lr": self.config.min_lr,
         #      "weight_decay": self.config.weight_decay},
-        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_cross_attention(n)],
+        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
+        #     and is_cross_attention(n)],
         #      "lr": self.config.max_lr,
         #      "weight_decay": self.config.weight_decay},
         #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and not is_backbone(n)
@@ -176,16 +177,22 @@ class Quant:
         #      "lr": self.config.lr,
         #      "weight_decay": 0.0}
         # ]
-        self.optimizer_grouped_parameters = [
-            {"params": [p for n, p in param_optimizer],
-             "lr": self.config.max_lr,
-             "weight_decay": 0}
-        ]
+
+        if warmup:
+            self.optimizer_grouped_parameters = [
+                {"params": [p for n, p in param_optimizer],
+                 "lr": self.config.warmup_lr,
+                 "weight_decay": 0}
+            ]
+
+        else:
+            self.optimizer_grouped_parameters = [
+                {"params": [p for n, p in param_optimizer],
+                 "lr": self.config.max_lr,
+                 "weight_decay": 0}
+            ]
 
     def prepare_optimizer(self):
-
-        # differential lr for each sub module first
-        self.differential_lr()
 
         # optimizer
         if self.config.optimizer_name == "Adam":
@@ -200,7 +207,11 @@ class Quant:
             raise NotImplementedError
 
         # lr scheduler
-        if self.config.lr_scheduler_name == "WarmupCosineAnealing":
+        if self.config.lr_scheduler_name == "MultiStepLR":
+            self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.config.milestones,
+                                                                  gamma=0.1)
+            self.lr_scheduler_each_iter = False
+        elif self.config.lr_scheduler_name == "WarmupCosineAnealing":
             num_train_optimization_steps = self.config.num_epoch * len(self.train_data_loader) \
                                            // self.config.accumulation_steps
             self.scheduler = get_cosine_schedule_with_warmup(self.optimizer,
@@ -218,8 +229,8 @@ class Quant:
                                                              num_training_steps=num_train_optimization_steps)
             self.lr_scheduler_each_iter = True
         elif self.config.lr_scheduler_name == "ReduceLROnPlateau":
-            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="max", factor=0.6,
-                                                                        patience=1, min_lr=1e-7)
+            self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode="min", factor=0.8,
+                                                                        patience=3, min_lr=1e-5)
             self.lr_scheduler_each_iter = False
         elif self.config.lr_scheduler_name == "WarmupConstant":
             self.scheduler = get_constant_schedule_with_warmup(self.optimizer,
@@ -287,6 +298,8 @@ class Quant:
         self.pick_model()
 
         if self.config.data_parallel:
+
+            self.differential_lr(warmup=True)
             self.prepare_optimizer()
 
             if self.config.apex:
@@ -301,6 +314,7 @@ class Quant:
             if self.config.reuse_model:
                 self.load_check_point()
 
+            self.differential_lr(warmup=True)
             self.prepare_optimizer()
 
             if self.config.apex:
@@ -337,12 +351,13 @@ class Quant:
 
         while self.epoch <= self.config.num_epoch:
 
-            self.train_rmspe = []
+            predictions = []
+            labels = []
 
-            # update lr and start from start_epoch
-            if (self.epoch >= 1) and (not self.lr_scheduler_each_iter) \
-                    and (self.config.lr_scheduler_name != "ReduceLROnPlateau"):
-                self.scheduler.step()
+            # warmup lr for parameter warmup_epoch
+            if self.epoch >= self.config.warmup_epoches:
+                self.differential_lr(warmup=False)
+                self.prepare_optimizer()
 
             self.log.write("Epoch%s\n" % self.epoch)
             self.log.write("\n")
@@ -410,7 +425,9 @@ class Quant:
 
                 outputs = to_numpy(outputs)
                 target = to_numpy(target)
-                self.train_rmspe.append(rmspe(outputs, target))
+
+                predictions.append(outputs.flatten())
+                labels.append(target.flatten())
 
                 sum_train_loss = sum_train_loss + np.array([loss.item() * self.config.batch_size])
                 sum_train = sum_train + np.array([self.config.batch_size])
@@ -420,7 +437,7 @@ class Quant:
                     train_loss = sum_train_loss / (sum_train + 1e-12)
                     sum_train_loss[...] = 0
                     sum_train[...] = 0
-                    mean_train_rmspe = np.mean(self.train_rmspe)
+                    mean_train_rmspe = rmspe(np.concatenate(labels), np.concatenate(predictions))
 
                     self.log.write(
                         "lr: {} train loss: {} train_rmspe: {} \n"
@@ -429,6 +446,10 @@ class Quant:
 
                 if (tr_batch_i + 1) % self.eval_step == 0:
                     self.evaluate_op()
+
+            # update lr and start from start_epoch
+            if (not self.lr_scheduler_each_iter) and (self.config.lr_scheduler_name != "ReduceLROnPlateau"):
+                self.scheduler.step()
 
             if self.count >= self.config.early_stopping:
                 break
@@ -443,7 +464,8 @@ class Quant:
 
         criterion = RMSPELoss()
 
-        self.eval_rmspe = []
+        predictions = []
+        labels = []
 
         with torch.no_grad():
 
@@ -473,16 +495,18 @@ class Quant:
 
                 outputs = to_numpy(outputs)
                 target = to_numpy(target)
-                self.eval_rmspe.append(rmspe(outputs, target))
+
+                predictions.append(outputs.flatten())
+                labels.append(target.flatten())
 
                 valid_loss = valid_loss + np.array([loss.item() * self.config.val_batch_size])
                 valid_num = valid_num + np.array([self.config.val_batch_size])
 
             valid_loss = valid_loss / valid_num
-            mean_eval_rmspe = np.mean(self.eval_rmspe)
+            mean_eval_rmspe = rmspe(np.concatenate(labels), np.concatenate(predictions))
 
             self.log.write(
-                "validation loss: {} eval_rmspe: {} \n"
+                "mean validation loss: {} eval_rmspe: {} \n"
                     .format(valid_loss[0], mean_eval_rmspe)
             )
 
@@ -543,23 +567,32 @@ class Quant:
 if __name__ == "__main__":
     args = parser.parse_args()
 
+    # config = Config(
+    #     args.fold,
+    #     model_type=args.model_type,
+    #     seed=args.seed,
+    #     batch_size=args.batch_size,
+    #     accumulation_steps=args.accumulation_steps
+    # )
+
     # update fold
-    config = Config(
-        args.fold,
-        model_type=args.model_type,
-        seed=args.seed,
-        batch_size=args.batch_size,
-        accumulation_steps=args.accumulation_steps
-    )
+    for fold in range(5):
+        config = Config(
+            fold,
+            model_type=args.model_type,
+            seed=args.seed,
+            batch_size=args.batch_size,
+            accumulation_steps=args.accumulation_steps
+        )
 
-    # seed
-    seed_everything(config.seed)
+        # seed
+        seed_everything(config.seed)
 
-    # init class instance
-    qa = Quant(config)
+        # init class instance
+        qa = Quant(config)
 
-    # trainig
-    qa.train_op()
+        # trainig
+        qa.train_op()
 
-    # back testing
-    # qa.test_op(online=False)
+        # back testing
+        # qa.test_op(online=False)

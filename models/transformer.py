@@ -11,18 +11,21 @@ class TransfomerModel(nn.Module):
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
 
+        self.cate_hidden_size = config.hidden_size // 4
+        self.cont_hidden_size = config.hidden_size - config.hidden_size // 4
+
         # if exists category features
         if cate_col_size > 0:
             self.cate_emb = nn.Embedding(config.total_cate_size, config.emb_size, padding_idx=0)
 
             self.cate_proj = nn.Sequential(
-                nn.Linear(config.emb_size * cate_col_size, config.hidden_size // 2),
-                nn.LayerNorm(config.hidden_size // 2),
+                nn.Linear(config.emb_size * cate_col_size, self.cate_hidden_size),
+                nn.LayerNorm(self.cate_hidden_size),
             )
 
             self.cont_emb = nn.Sequential(
-                nn.Linear(cont_col_size, config.hidden_size // 2),
-                nn.LayerNorm(config.hidden_size // 2),
+                nn.Linear(cont_col_size, self.cont_hidden_size),
+                nn.LayerNorm(self.cont_hidden_size),
             )
 
         else:
@@ -95,14 +98,18 @@ class LSTMATTNModel(nn.Module):
 
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
+
+        self.cate_hidden_size = config.hidden_size // 4
+        self.cont_hidden_size = config.hidden_size - config.hidden_size // 4
+
         self.cate_emb = nn.Embedding(config.total_cate_size, config.emb_size, padding_idx=0)
         self.cate_proj = nn.Sequential(
-            nn.Linear(config.emb_size * cate_col_size, config.hidden_size // 2),
-            nn.LayerNorm(config.hidden_size // 2),
+            nn.Linear(config.emb_size * cate_col_size, self.cate_hidden_size ),
+            nn.LayerNorm(self.cate_hidden_size),
         )
         self.cont_emb = nn.Sequential(
-            nn.Linear(cont_col_size, config.hidden_size // 2),
-            nn.LayerNorm(config.hidden_size // 2),
+            nn.Linear(cont_col_size, self.cont_hidden_size),
+            nn.LayerNorm(self.cont_hidden_size),
         )
 
         self.encoder = nn.LSTM(

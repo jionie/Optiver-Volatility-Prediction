@@ -1,7 +1,7 @@
 import os
 import gc
 from tqdm import tqdm
-from joblib import dump, load
+from joblib import dump, load, Parallel, delayed
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold
@@ -11,14 +11,14 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class QuantDataset(Dataset):
-    def __init__(self, config, sample_indices, mode="train"):
+    def __init__(self, config, df, sample_indices, mode="train", parallel=False):
 
         self.config = config
+        self.parallel = parallel
 
         # load data df
         self.mode = mode
         if mode == "train" or mode == "val":
-            df = pd.read_csv(self.config.train_data)
             other_df = pd.read_csv(self.config.test_data)
             full_df = pd.concat([df, other_df], axis=0)
 
@@ -26,7 +26,6 @@ class QuantDataset(Dataset):
             gc.collect()
 
         else:
-            df = pd.read_csv(self.config.test_data)
             other_df = pd.read_csv(self.config.train_data)
             full_df = pd.concat([df, other_df], axis=0)
 
@@ -34,7 +33,8 @@ class QuantDataset(Dataset):
             gc.collect()
 
         self.sample_indices = sample_indices
-        self.valid_time_ids = df["time_id"].iloc[self.sample_indices].to_list()
+        self.valid_time_ids = list(df["time_id"].iloc[self.sample_indices].unique())
+        self.all_time_ids = list(df["time_id"].unique())
 
         self.seq_len = self.config.hist_window
 
@@ -45,15 +45,15 @@ class QuantDataset(Dataset):
         self.means_trade = np.array([1.0, 100, 3.0])
         self.stds_trade = np.array([0.004, 153, 3.5])
 
+        # store stock_id and time_id
+        self.stock_ids = df["stock_id"].values
+        self.time_ids = df["time_id"].values
+
         # cont_x init
         self.order_books = None
         self.trade_books = None
         self.cont_cols = self.config.cont_cols
         self.load_data()
-
-        # store stock_id and time_id
-        self.stock_ids = df["stock_id"].values
-        self.time_ids = df["time_id"].values
 
         # cate_x init
         self.cate_cols = self.config.cate_cols
@@ -110,25 +110,52 @@ class QuantDataset(Dataset):
                 int_cols = book_df.select_dtypes(include=[np.int64]).columns
                 book_df[int_cols] = book_df[int_cols].astype(np.int32)
 
-                book_by_time = dict()
-                for time_id in book_df.time_id.unique():
+                if self.parallel:
 
-                    df = book_df[book_df["time_id"] == time_id].reset_index(drop=True)
-                    filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
-                    filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
-                    filled_df = filled_df.fillna(method="ffill")
-                    filled_df = filled_df[self.config.order_features].values
+                    def fill_order(time_id):
 
-                    if self.config.normalize == "standard":
-                        filled_df = (filled_df - self.means_order) / self.stds_order
-                    elif self.config.normalize == "log1p":
-                        filled_df = np.log1p(filled_df)
-                    else:
-                        raise NotImplementedError
+                        df_ = book_df[book_df["time_id"] == time_id].reset_index(drop=True)
+                        filled_df_ = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
+                        filled_df_ = pd.merge(filled_df_, df_, on=["seconds_in_bucket"], how="left")
+                        filled_df_ = filled_df_.fillna(method="ffill")
+                        filled_df_ = filled_df_[self.config.order_features].values
 
-                    book_by_time[time_id] = filled_df
+                        if self.config.normalize == "standard":
+                            filled_df_ = (filled_df_ - self.means_order) / self.stds_order
+                        elif self.config.normalize == "log1p":
+                            filled_df_ = np.log1p(filled_df_)
+                        else:
+                            raise NotImplementedError
 
-                self.order_books[stock_id] = book_by_time
+                        return time_id, filled_df_
+
+                    book_by_time_list = Parallel(n_jobs=-1, verbose=1)(delayed(fill_order)(time_id)
+                                                                       for time_id in self.valid_time_ids)
+                    book_by_time = {element[0]: element[1] for element in enumerate(book_by_time_list)}
+
+                    self.order_books[stock_id] = book_by_time
+
+                else:
+
+                    book_by_time = dict()
+                    for time_id in book_df.time_id.unique():
+
+                        df = book_df[book_df["time_id"] == time_id].reset_index(drop=True)
+                        filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
+                        filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
+                        filled_df = filled_df.fillna(method="ffill")
+                        filled_df = filled_df[self.config.order_features].values
+
+                        if self.config.normalize == "standard":
+                            filled_df = (filled_df - self.means_order) / self.stds_order
+                        elif self.config.normalize == "log1p":
+                            filled_df = np.log1p(filled_df)
+                        else:
+                            raise NotImplementedError
+
+                        book_by_time[time_id] = filled_df
+
+                    self.order_books[stock_id] = book_by_time
 
             with open(order_books_path, "wb") as f:
                 dump(self.order_books, f)
@@ -156,25 +183,51 @@ class QuantDataset(Dataset):
                 int_cols = trade_df.select_dtypes(include=[np.int64]).columns
                 trade_df[int_cols] = trade_df[int_cols].astype(np.int32)
 
-                trade_by_time = dict()
-                for time_id in trade_df.time_id.unique():
+                if self.parallel:
 
-                    df = trade_df[trade_df["time_id"] == time_id].reset_index(drop=True)
-                    filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
-                    filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
-                    filled_df = filled_df.fillna(0)
-                    filled_df = filled_df[self.config.trade_features].values
+                    def fill_trade(time_id):
 
-                    if self.config.normalize == "standard":
-                        filled_df = (filled_df - self.means_trade) / self.stds_trade
-                    elif self.config.normalize == "log1p":
-                        filled_df = np.log1p(filled_df)
-                    else:
-                        raise NotImplementedError
+                        df_ = trade_df[trade_df["time_id"] == time_id].reset_index(drop=True)
+                        filled_df_ = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
+                        filled_df_ = pd.merge(filled_df_, df_, on=["seconds_in_bucket"], how="left")
+                        filled_df_ = filled_df_.fillna(0)
+                        filled_df_ = filled_df_[self.config.trade_features].values
 
-                    trade_by_time[time_id] = filled_df
+                        if self.config.normalize == "standard":
+                            filled_df_ = (filled_df_ - self.means_trade) / self.stds_trade
+                        elif self.config.normalize == "log1p":
+                            filled_df_ = np.log1p(filled_df_)
+                        else:
+                            raise NotImplementedError
 
-                self.trade_books[stock_id] = trade_by_time
+                        return time_id, filled_df_
+
+                    trade_by_time_list = Parallel(n_jobs=-1, verbose=1)(delayed(fill_trade)(time_id)
+                                                                        for time_id in self.valid_time_ids)
+                    trade_by_time = {element[0]: element[1] for element in enumerate(trade_by_time_list)}
+                    self.trade_books[stock_id] = trade_by_time
+
+                else:
+
+                    trade_by_time = dict()
+                    for time_id in trade_df.time_id.unique():
+
+                        df = trade_df[trade_df["time_id"] == time_id].reset_index(drop=True)
+                        filled_df = pd.DataFrame({"seconds_in_bucket": range(self.seq_len)})
+                        filled_df = pd.merge(filled_df, df, on=["seconds_in_bucket"], how="left")
+                        filled_df = filled_df.fillna(0)
+                        filled_df = filled_df[self.config.trade_features].values
+
+                        if self.config.normalize == "standard":
+                            filled_df = (filled_df - self.means_trade) / self.stds_trade
+                        elif self.config.normalize == "log1p":
+                            filled_df = np.log1p(filled_df)
+                        else:
+                            raise NotImplementedError
+
+                        trade_by_time[time_id] = filled_df
+
+                    self.trade_books[stock_id] = trade_by_time
 
             with open(trade_books_path, "wb") as f:
                 dump(self.trade_books, f)
@@ -230,8 +283,8 @@ def get_train_val_loader(config):
         if fold != config.fold:
             continue
         else:
-            train_dataset = QuantDataset(config, train_index, mode="train")
-            val_dataset = QuantDataset(config, val_index, mode="val")
+            train_dataset = QuantDataset(config, df.copy(), train_index, mode="train")
+            val_dataset = QuantDataset(config, df.copy(), val_index, mode="val")
             train_loader = DataLoader(train_dataset,
                                       batch_size=config.batch_size,
                                       num_workers=config.num_workers,
@@ -248,13 +301,12 @@ def get_train_val_loader(config):
 
 
 def get_test_loader(config):
-
     # load data
     df = pd.read_csv(config.test_data)
 
     # infer dataset
     test_index = range(df.shape[0])
-    test_dataset = QuantDataset(config, test_index, mode="test")
+    test_dataset = QuantDataset(config, df, test_index, mode="test")
 
     test_loader = DataLoader(test_dataset,
                              batch_size=config.val_batch_size,

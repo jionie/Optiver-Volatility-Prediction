@@ -72,7 +72,7 @@ class Config:
         # model
         self.model_type = model_type
         self.model_name = "QuantModel"
-        self.emb_size = 128
+        self.emb_size = 256
         self.hidden_size = 512
         self.target_size = len(self.target_cols)
         self.dropout = 0.2
@@ -104,12 +104,15 @@ class Config:
         self.max_grad_norm = 2
 
         # lr scheduler, can choose to use proportion or steps
-        self.lr_scheduler_name = "WarmupLinear"
+        self.lr_scheduler_name = "MultiStepLR"
+        self.milestones = [5, 10, 20]
         self.warmup_proportion = 0
         self.warmup_steps = 200
+        self.warmup_epoches = 1
 
         # lr
-        self.max_lr = 1e-3
+        self.max_lr = 1e-2
+        self.warmup_lr = 5e-5
         self.min_lr = 1e-5
         self.lr = 2e-4
         self.weight_decay = 0.001
@@ -121,6 +124,6 @@ class Config:
         # saving rate
         self.saving_rate = 1 / 3
         # early stopping
-        self.early_stopping = 6
+        self.early_stopping = 30 # 10 epoch
         # progress rate
         self.progress_rate = 1 / 3
