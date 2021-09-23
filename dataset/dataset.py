@@ -243,7 +243,9 @@ class QuantDataset(Dataset):
             trade_x = torch.from_numpy(self.trade_books[self.stock_ids[indices]][self.time_ids[indices]])
 
         except Exception as e:
-            trade_x = torch.zeros((self.seq_len, len(self.config.trade_features)))
+            trade_x = (torch.zeros((self.seq_len, len(self.config.trade_features)))
+                       - torch.from_numpy(self.means_trade).unsqueeze(0)) / \
+                      torch.from_numpy(self.stds_trade).unsqueeze(0)
 
         cont_x = torch.cat([book_x, trade_x], dim=1)
 

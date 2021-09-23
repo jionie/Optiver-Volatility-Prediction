@@ -105,13 +105,13 @@ class Config:
 
         # lr scheduler, can choose to use proportion or steps
         self.lr_scheduler_name = "MultiStepLR"
-        self.milestones = [5, 10, 20]
+        self.milestones = [5, 10]
         self.warmup_proportion = 0
         self.warmup_steps = 200
         self.warmup_epoches = 1
 
         # lr
-        self.max_lr = 1e-2
+        self.max_lr = 1e-3
         self.warmup_lr = 5e-5
         self.min_lr = 1e-5
         self.lr = 2e-4
@@ -120,10 +120,10 @@ class Config:
         # gradient accumulation
         self.accumulation_steps = accumulation_steps
         # epochs
-        self.num_epoch = 30
+        self.num_epoch = 10
         # saving rate
         self.saving_rate = 1 / 3
         # early stopping
-        self.early_stopping = 30 # 10 epoch
+        self.early_stopping = 30  # 10 epoch
         # progress rate
         self.progress_rate = 1 / 3

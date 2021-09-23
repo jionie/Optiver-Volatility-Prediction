@@ -32,8 +32,8 @@ from config import Config
 
 parser = argparse.ArgumentParser(description="arg parser")
 parser.add_argument("--fold", type=int, default=0, required=False, help="specify the fold for training")
-parser.add_argument("--model_type", type=str, default="bert", required=False, help="specify the model type")
-parser.add_argument("--seed", type=int, default=2020, required=False, help="specify the seed")
+parser.add_argument("--model_type", type=str, default="lstm", required=False, help="specify the model type")
+parser.add_argument("--seed", type=int, default=2021, required=False, help="specify the seed")
 parser.add_argument("--batch_size", type=int, default=64, required=False, help="specify the batch size")
 parser.add_argument("--accumulation_steps", type=int, default=1, required=False, help="specify the accumulation_steps")
 
@@ -209,7 +209,7 @@ class Quant:
         # lr scheduler
         if self.config.lr_scheduler_name == "MultiStepLR":
             self.scheduler = torch.optim.lr_scheduler.MultiStepLR(self.optimizer, milestones=self.config.milestones,
-                                                                  gamma=0.1)
+                                                                  gamma=0.5)
             self.lr_scheduler_each_iter = False
         elif self.config.lr_scheduler_name == "WarmupCosineAnealing":
             num_train_optimization_steps = self.config.num_epoch * len(self.train_data_loader) \
@@ -576,7 +576,7 @@ if __name__ == "__main__":
     # )
 
     # update fold
-    for fold in range(5):
+    for fold in range(2, 5):
         config = Config(
             fold,
             model_type=args.model_type,
