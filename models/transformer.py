@@ -11,8 +11,9 @@ class TransfomerModel(nn.Module):
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
 
-        self.cate_hidden_size = config.hidden_size // 4
-        self.cont_hidden_size = config.hidden_size - config.hidden_size // 4
+        self.cate_hidden_size = config.hidden_size // 8
+        self.cont_hidden_size = config.hidden_size - config.hidden_size // 8
+        self.extra_hidden_size = config.total_extra_size
 
         # if exists category features
         if cate_col_size > 0:
@@ -49,20 +50,20 @@ class TransfomerModel(nn.Module):
 
         def get_reg():
             return nn.Sequential(
-                nn.Linear(config.hidden_size, config.hidden_size),
-                nn.LayerNorm(config.hidden_size),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
+                nn.LayerNorm(config.hidden_size + self.extra_hidden_size),
                 nn.Dropout(config.dropout),
-                nn.ReLU(),
-                nn.Linear(config.hidden_size, config.hidden_size),
-                nn.LayerNorm(config.hidden_size),
+                nn.SiLU(),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
+                nn.LayerNorm(config.hidden_size+ self.extra_hidden_size),
                 nn.Dropout(config.dropout),
-                nn.ReLU(),
-                nn.Linear(config.hidden_size, config.target_size),
+                nn.SiLU(),
+                nn.Linear(config.hidden_size+ self.extra_hidden_size, config.target_size),
             )
 
         self.reg_layer = get_reg()
 
-    def forward(self, cate_x, cont_x, mask):
+    def forward(self, cate_x, cont_x, extra_x, mask):
 
         batch_size = cont_x.size(0)
 
@@ -85,6 +86,7 @@ class TransfomerModel(nn.Module):
         sequence_output = encoded_layers[-1]
         sequence_output = sequence_output[:, -1]
 
+        sequence_output = torch.cat([sequence_output, extra_x], dim=1)
         pred_y = self.reg_layer(sequence_output)
 
         return pred_y
@@ -95,22 +97,33 @@ class LSTMATTNModel(nn.Module):
         super(LSTMATTNModel, self).__init__()
 
         self.seq_len = config.hist_window
-
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
 
-        self.cate_hidden_size = config.hidden_size // 4
-        self.cont_hidden_size = config.hidden_size - config.hidden_size // 4
+        self.cate_hidden_size = config.hidden_size // 8
+        self.cont_hidden_size = config.hidden_size - config.hidden_size // 8
+        self.extra_hidden_size = config.total_extra_size
 
-        self.cate_emb = nn.Embedding(config.total_cate_size, config.emb_size, padding_idx=0)
-        self.cate_proj = nn.Sequential(
-            nn.Linear(config.emb_size * cate_col_size, self.cate_hidden_size ),
-            nn.LayerNorm(self.cate_hidden_size),
-        )
-        self.cont_emb = nn.Sequential(
-            nn.Linear(cont_col_size, self.cont_hidden_size),
-            nn.LayerNorm(self.cont_hidden_size),
-        )
+        # if exists category features
+        if cate_col_size > 0:
+            self.cate_emb = nn.Embedding(config.total_cate_size, config.emb_size, padding_idx=0)
+
+            self.cate_proj = nn.Sequential(
+                nn.Linear(config.emb_size * cate_col_size, self.cate_hidden_size),
+                nn.LayerNorm(self.cate_hidden_size),
+            )
+
+            self.cont_emb = nn.Sequential(
+                nn.Linear(cont_col_size, self.cont_hidden_size),
+                nn.LayerNorm(self.cont_hidden_size),
+            )
+
+        else:
+
+            self.cont_emb = nn.Sequential(
+                nn.Linear(cont_col_size, config.hidden_size),
+                nn.LayerNorm(config.hidden_size),
+            )
 
         self.encoder = nn.LSTM(
             config.hidden_size,
@@ -133,20 +146,20 @@ class LSTMATTNModel(nn.Module):
 
         def get_reg():
             return nn.Sequential(
-                nn.Linear(config.hidden_size, config.hidden_size),
-                nn.LayerNorm(config.hidden_size),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
+                nn.LayerNorm(config.hidden_size + self.extra_hidden_size),
                 nn.Dropout(config.dropout),
-                nn.ReLU(),
-                nn.Linear(config.hidden_size, config.hidden_size),
-                nn.LayerNorm(config.hidden_size),
+                nn.SiLU(),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
+                nn.LayerNorm(config.hidden_size + self.extra_hidden_size),
                 nn.Dropout(config.dropout),
-                nn.ReLU(),
-                nn.Linear(config.hidden_size, config.target_size),
+                nn.SiLU(),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.target_size),
             )
 
         self.reg_layer = get_reg()
 
-    def forward(self, cate_x, cont_x, mask):
+    def forward(self, cate_x, cont_x, extra_x, mask):
 
         batch_size = cont_x.size(0)
 
@@ -170,6 +183,9 @@ class LSTMATTNModel(nn.Module):
         encoded_layers = self.attn(output, extended_attention_mask, head_mask=head_mask)
         sequence_output = encoded_layers[-1]
         sequence_output = sequence_output[:, -1]
+
+        sequence_output = torch.cat([sequence_output, extra_x], dim=1)
+
         pred_y = self.reg_layer(sequence_output)
 
         return pred_y

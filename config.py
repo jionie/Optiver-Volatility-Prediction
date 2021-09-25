@@ -50,7 +50,10 @@ class Config:
         self.target_scale = 100
         self.normalize = "standard"
 
+        self.total_extra_size = 511
+
         # cross validation configs
+        self.n_clusters = 7
         self.split = "GroupKFold"
         self.seed = seed
         self.n_splits = 5
@@ -72,8 +75,8 @@ class Config:
         # model
         self.model_type = model_type
         self.model_name = "QuantModel"
-        self.emb_size = 256
-        self.hidden_size = 512
+        self.emb_size = 64
+        self.hidden_size = 64
         self.target_size = len(self.target_cols)
         self.dropout = 0.2
         self.num_hidden_layers = 2

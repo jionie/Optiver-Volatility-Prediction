@@ -1,10 +1,36 @@
+from joblib import Parallel, delayed
 import pandas as pd
+from pandas.core.common import flatten
+from collections import OrderedDict
 import numpy as np
 from sklearn.cluster import KMeans
 import warnings
-
 warnings.filterwarnings("ignore")
 pd.set_option("max_columns", 300)
+
+
+CONFIG = {
+    "root_dir": "../input/optiver-realized-volatility-prediction/",
+    "ckpt_dir": "../ckpts",
+    "kfold_seed": 42,
+    "n_splits": 5,
+    "n_clusters": 7,
+    "shuffle": True,
+    "shuffle_seed": 1996
+}
+
+
+def read_train_test():
+    train = pd.read_csv("../input/optiver-realized-volatility-prediction/train.csv")
+    test = pd.read_csv("../input/optiver-realized-volatility-prediction/test.csv")
+
+    # Create a key to merge with book and trade data
+    train["row_id"] = train["stock_id"].astype(str) + "-" + train["time_id"].astype(str)
+    test["row_id"] = test["stock_id"].astype(str) + "-" + test["time_id"].astype(str)
+
+    print("Our training set has {} rows".format(train.shape[0]))
+
+    return train, test
 
 
 def activity_counts(df):
@@ -170,6 +196,28 @@ def count_unique(series):
     return len(np.unique(series))
 
 
+# Function to fill missing seconds (for each stock id)
+def fill_missing_seconds(df):
+    time_ids = list(OrderedDict.fromkeys(df["time_id"]))
+
+    filled_df = pd.DataFrame(index=range(len(time_ids) * 600), columns=df.columns)
+
+    all_seconds_in_bucket = list(flatten([range(600) for i in range(len(time_ids))]))
+    filled_df["seconds_in_bucket"] = all_seconds_in_bucket
+
+    all_time_ids = list(flatten([[time_ids[i]] * 600 for i in range(len(time_ids))]))
+    filled_df["time_id"] = all_time_ids
+
+    filled_df = pd.merge(filled_df, df, on=["time_id", "seconds_in_bucket"], how="left", suffixes=("_to_move", ""))
+
+    to_remove_columns = [column for column in filled_df.columns if "to_move" in column]
+    filled_df = filled_df.drop(to_remove_columns, axis=1)
+
+    filled_df = filled_df.fillna(method="ffill")
+
+    return filled_df
+
+
 # Function to preprocess book data (for each stock id)
 def book_preprocessor(file_path):
     df = pd.read_parquet(file_path)
@@ -284,7 +332,7 @@ def book_preprocessor(file_path):
             df_feature = df_feature.merge(new_df_feature, how="left", left_on="time_id_",
                                           right_on="time_id__{}".format(window))
 
-            # Drop unnecessary time_ids
+            # Drop unnecesary time_ids
             df_feature.drop(["time_id__{}".format(window)], axis=1, inplace=True)
 
     # Create row_id so we can merge
@@ -395,9 +443,38 @@ def trade_preprocessor(file_path):
     return df_feature
 
 
+# Funtion to make preprocessing function in parallel (for each stock id)
+def preprocessor(list_stock_ids, is_train=True):
+    # Parrallel for loop
+    def for_joblib(stock_id):
+        # Train
+        if is_train:
+            file_path_book = CONFIG["root_dir"] + "book_train.parquet/stock_id=" + str(stock_id)
+            file_path_trade = CONFIG["root_dir"] + "trade_train.parquet/stock_id=" + str(stock_id)
+        # Test
+        else:
+            file_path_book = CONFIG["root_dir"] + "book_test.parquet/stock_id=" + str(stock_id)
+            file_path_trade = CONFIG["root_dir"] + "trade_test.parquet/stock_id=" + str(stock_id)
+
+        # Preprocess book and trade data and merge them
+        df_tmp = pd.merge(book_preprocessor(file_path_book), trade_preprocessor(file_path_trade), on="row_id",
+                          how="left")
+
+        # Return the merge dataframe
+        return df_tmp
+
+    # Use parallel api to call paralle for loop
+    df = Parallel(n_jobs=-1, verbose=1)(delayed(for_joblib)(stock_id) for stock_id in list_stock_ids)
+
+    # Concatenate all the dataframes that return from Parallel
+    df = pd.concat(df, ignore_index=True)
+
+    return df
+
+
 # Process agg by kmeans
 def get_kmeans_idx(n_clusters=7):
-    train_p = pd.read_csv("../../input/optiver-realized-volatility-prediction/train.csv")
+    train_p = pd.read_csv("../input/optiver-realized-volatility-prediction/train.csv")
     train_p = train_p.pivot(index="time_id", columns="stock_id", values="target")
 
     corr = train_p.corr()
@@ -520,5 +597,34 @@ def agg_stat_features_by_market(df, operations=None, operations_names=None):
 
     df = df.merge(df_time_id, how="left", left_on=["time_id"], right_on=["time_id__time"])
     df.drop("time_id__time", axis=1, inplace=True)
+
+    return df
+
+
+def generate_interval_feature(df):
+
+    # Get unique stock ids
+    df_stock_ids = df["stock_id"].unique()
+
+    # Preprocess them using Parallel and our single stock id functions
+    df_ = preprocessor(df_stock_ids, is_train=True)
+    df = df.merge(df_, on=["row_id"], how="left")
+
+    # abs log columns
+    abs_log_columns = [column for column in df.columns if
+                       "order_flow_imbalance" in column or
+                       "order_book_slope" in column or
+                       "depth_imbalance" in column or
+                       "pressure_imbalance" in column or
+                       "total_volume" in column or
+                       "seconds_gap" in column or
+                       "trade_volumes" in column or
+                       "trade_order_count" in column or
+                       "trade_seconds_gap" in column or
+                       "trade_tendency" in column
+                       ]
+
+    # apply abs + log1p
+    df[abs_log_columns] = (df[abs_log_columns].apply(np.abs)).apply(np.log1p)
 
     return df

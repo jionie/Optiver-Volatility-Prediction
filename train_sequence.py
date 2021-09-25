@@ -145,39 +145,6 @@ class Quant:
 
         param_optimizer = list(self.model.named_parameters())
 
-        # def is_backbone(n):
-        #     prefix = "bert"
-        #     return prefix in n
-        #
-        # def is_cross_attention(n):
-        #     cross_attention = "cross_attention"
-        #     return cross_attention in n
-
-        # no_decay = ["bias", "LayerNorm.bias", "LayerNorm.weight"]
-        # self.optimizer_grouped_parameters = [
-        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and is_backbone(n)],
-        #      "lr": self.config.min_lr,
-        #      "weight_decay": self.config.weight_decay},
-        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay)
-        #     and is_cross_attention(n)],
-        #      "lr": self.config.max_lr,
-        #      "weight_decay": self.config.weight_decay},
-        #     {"params": [p for n, p in param_optimizer if not any(nd in n for nd in no_decay) and not is_backbone(n)
-        #                 and not is_cross_attention(n)],
-        #      "lr": self.config.lr,
-        #      "weight_decay": self.config.weight_decay},
-        #     {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and is_backbone(n)],
-        #      "lr": self.config.min_lr,
-        #      "weight_decay": 0.0},
-        #     {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and is_cross_attention(n)],
-        #      "lr": self.config.max_lr,
-        #      "weight_decay": 0.0},
-        #     {"params": [p for n, p in param_optimizer if any(nd in n for nd in no_decay) and not is_backbone(n)
-        #                 and not is_cross_attention(n)],
-        #      "lr": self.config.lr,
-        #      "weight_decay": 0.0}
-        # ]
-
         if warmup:
             self.optimizer_grouped_parameters = [
                 {"params": [p for n, p in param_optimizer],
@@ -369,7 +336,7 @@ class Quant:
             torch.cuda.empty_cache()
             self.model.zero_grad()
 
-            for tr_batch_i, (cate_x, cont_x, mask, target) in enumerate(self.train_data_loader):
+            for tr_batch_i, (cate_x, cont_x, extra_x, mask, target) in enumerate(self.train_data_loader):
 
                 rate = 0
                 for param_group in self.optimizer.param_groups:
@@ -382,10 +349,11 @@ class Quant:
                 if cate_x is not None:
                     cate_x = cate_x.to(self.config.device).long()
                 cont_x = cont_x.to(self.config.device).float()
+                extra_x = extra_x.to(self.config.device).float()
                 mask = mask.to(self.config.device).float()
                 target = target.to(self.config.device).float()
 
-                outputs = self.model(cate_x, cont_x, mask)
+                outputs = self.model(cate_x, cont_x, extra_x, mask)
 
                 if self.config.apex:
                     with torch.cuda.amp.autocast():
@@ -472,7 +440,7 @@ class Quant:
             # init cache
             torch.cuda.empty_cache()
 
-            for val_batch_i, (cate_x, cont_x, mask, target) in enumerate(self.val_data_loader):
+            for val_batch_i, (cate_x, cont_x, extra_x, mask, target) in enumerate(self.val_data_loader):
 
                 # set model to eval mode
                 self.model.eval()
@@ -481,10 +449,11 @@ class Quant:
                 if cate_x is not None:
                     cate_x = cate_x.to(self.config.device).long()
                 cont_x = cont_x.to(self.config.device).float()
+                extra_x = extra_x.to(self.config.device).float()
                 mask = mask.to(self.config.device).float()
                 target = target.to(self.config.device).float()
 
-                outputs = self.model(cate_x, cont_x, mask)
+                outputs = self.model(cate_x, cont_x, extra_x, mask)
                 loss = criterion(outputs, target)
 
                 self.writer.add_scalar("val_loss_" + str(self.config.fold), loss.item(), (self.eval_count - 1) * len(
@@ -543,7 +512,7 @@ class Quant:
             # init cache
             torch.cuda.empty_cache()
 
-            for test_batch_i, (cate_x, cont_x, mask, target) in enumerate(self.test_data_loader):
+            for test_batch_i, (cate_x, cont_x, extra_x, mask, target) in enumerate(self.test_data_loader):
 
                 # set model to eval mode
                 self.model.eval()
@@ -552,9 +521,10 @@ class Quant:
                 if cate_x is not None:
                     cate_x = cate_x.to(self.config.device).long()
                 cont_x = cont_x.to(self.config.device).float()
+                extra_x = extra_x.to(self.config.device).float()
                 mask = mask.to(self.config.device).float()
 
-                outputs = self.model(cate_x, cont_x, mask)
+                outputs = self.model(cate_x, cont_x, extra_x, mask)
 
                 def to_numpy(tensor):
                     return tensor.detach().cpu().numpy()
@@ -576,7 +546,7 @@ if __name__ == "__main__":
     # )
 
     # update fold
-    for fold in range(2, 5):
+    for fold in range(1):
         config = Config(
             fold,
             model_type=args.model_type,

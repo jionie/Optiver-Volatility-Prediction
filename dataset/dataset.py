@@ -5,13 +5,16 @@ from joblib import dump, load, Parallel, delayed
 import numpy as np
 import pandas as pd
 from sklearn.model_selection import GroupKFold
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from dataset.generate_feature import generate_interval_feature, agg_stat_features_by_market, \
+    agg_stat_features_by_clusters
+
 
 class QuantDataset(Dataset):
-    def __init__(self, config, df, sample_indices, mode="train", parallel=False):
+    def __init__(self, config, df, sample_indices, mode="train", fold=0, parallel=False):
 
         self.config = config
         self.parallel = parallel
@@ -46,8 +49,8 @@ class QuantDataset(Dataset):
         self.stds_trade = np.array([0.004, 153, 3.5])
 
         # store stock_id and time_id
-        self.stock_ids = df["stock_id"].values
-        self.time_ids = df["time_id"].values
+        self.stock_ids = df.iloc[sample_indices]["stock_id"].values
+        self.time_ids = df.iloc[sample_indices]["time_id"].values
 
         # cont_x init
         self.order_books = None
@@ -63,15 +66,48 @@ class QuantDataset(Dataset):
 
         del full_df
         gc.collect()
-        self.cate_x = df[self.cate_cols].values
+        self.cate_x = df.iloc[sample_indices][self.cate_cols].values
 
         # target
         if mode == "train" or mode == "val":
-            self.target = df[self.config.target_cols].values
+            self.target = df.iloc[sample_indices][self.config.target_cols].values
         elif mode == "test":
             self.target = None
         else:
             raise NotImplementedError
+
+        # generate agg features then normalization
+        df = df.iloc[sample_indices]
+
+        df = agg_stat_features_by_market(df)
+        df = agg_stat_features_by_clusters(df, n_clusters=self.config.n_clusters, function=np.nanmean,
+                                           post_fix="_cluster_mean")
+        df = agg_stat_features_by_clusters(df, n_clusters=self.config.n_clusters, function=np.nanmax,
+                                           post_fix="_cluster_max")
+        df = agg_stat_features_by_clusters(df, n_clusters=self.config.n_clusters, function=np.nanmin,
+                                           post_fix="_cluster_min")
+        df = agg_stat_features_by_clusters(df, n_clusters=self.config.n_clusters, function=np.nanstd,
+                                           post_fix="_cluster_std")
+
+        except_columns = ["stock_id", "time_id", "target", "row_id"]
+        self.extra_cols = [column for column in df.columns if column not in except_columns]
+
+        if self.mode == "train":
+            scaler = StandardScaler()
+            scaler = scaler.fit(df[self.extra_cols])
+            dump(scaler, "../ckpts/{}_std_scaler_fold_{}.bin".format(self.config.model_type, fold + 1), compress=True)
+            df[self.extra_cols] = scaler.transform(df[self.extra_cols])
+        else:
+            scaler = load("../ckpts/{}_std_scaler_fold_{}.bin".format(self.config.model_type, fold + 1))
+            df[self.extra_cols] = scaler.transform(df[self.extra_cols])
+
+        # fill inf and na
+        df = df.replace([np.inf, -np.inf], -1)
+        df = df.fillna(-1)
+        self.extra_x = df[self.extra_cols].values
+
+        del df
+        gc.collect()
 
     def load_data(self):
 
@@ -234,13 +270,11 @@ class QuantDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        indices = self.sample_indices[idx]
-
         # continuous features
-        book_x = torch.from_numpy(self.order_books[self.stock_ids[indices]][self.time_ids[indices]])
+        book_x = torch.from_numpy(self.order_books[self.stock_ids[idx]][self.time_ids[idx]])
 
         try:
-            trade_x = torch.from_numpy(self.trade_books[self.stock_ids[indices]][self.time_ids[indices]])
+            trade_x = torch.from_numpy(self.trade_books[self.stock_ids[idx]][self.time_ids[idx]])
 
         except Exception as e:
             trade_x = (torch.zeros((self.seq_len, len(self.config.trade_features)))
@@ -250,7 +284,7 @@ class QuantDataset(Dataset):
         cont_x = torch.cat([book_x, trade_x], dim=1)
 
         # category feature
-        cate_x = torch.repeat_interleave(torch.from_numpy(self.cate_x[indices].astype(np.int32)).unsqueeze(0),
+        cate_x = torch.repeat_interleave(torch.from_numpy(self.cate_x[idx].astype(np.int32)).unsqueeze(0),
                                          self.seq_len, dim=0)
 
         # mask
@@ -259,9 +293,12 @@ class QuantDataset(Dataset):
         if self.mode == "test":
             target = torch.ones(len(self.config.target_cols))
         else:
-            target = torch.from_numpy(self.target[indices] * self.config.target_scale)
+            target = torch.from_numpy(self.target[idx] * self.config.target_scale)
 
-        return cate_x, cont_x, mask, target
+        # extra features for ffnn
+        extra_x = torch.from_numpy(self.extra_x[idx])
+
+        return cate_x, cont_x, extra_x, mask, target
 
     def __len__(self):
         return len(self.sample_indices)
@@ -274,7 +311,15 @@ def get_train_val_loader(config):
         raise NotImplementedError
 
     # load data
-    df = pd.read_csv(config.train_data)
+    interval_feature_path = os.path.join(config.data_dir, "train_interval_features.pkl")
+    if os.path.exists(interval_feature_path):
+        df = pd.read_pickle(interval_feature_path)
+    else:
+        df = pd.read_csv(config.train_data)
+        df["row_id"] = df["stock_id"].astype(str) + "-" + df["time_id"].astype(str)
+
+        df = generate_interval_feature(df)
+        df.to_pickle(interval_feature_path)
 
     # shuffle by random seed
     df = df.sample(frac=1, random_state=config.seed).reset_index(drop=True)
@@ -285,7 +330,7 @@ def get_train_val_loader(config):
         if fold != config.fold:
             continue
         else:
-            train_dataset = QuantDataset(config, df.copy(), train_index, mode="train")
+            train_dataset = QuantDataset(config, df.copy(), train_index, mode="train", fold=fold)
             val_dataset = QuantDataset(config, df.copy(), val_index, mode="val")
             train_loader = DataLoader(train_dataset,
                                       batch_size=config.batch_size,
@@ -304,7 +349,15 @@ def get_train_val_loader(config):
 
 def get_test_loader(config):
     # load data
-    df = pd.read_csv(config.test_data)
+    interval_feature_path = os.path.join(config.data_dir, "test_interval_features.pkl")
+    if os.path.exists(interval_feature_path):
+        df = pd.read_pickle(interval_feature_path)
+    else:
+        df = pd.read_csv(config.test_data)
+        df["row_id"] = df["stock_id"].astype(str) + "-" + df["time_id"].astype(str)
+
+        df = generate_interval_feature(df)
+        df.to_pickle(interval_feature_path)
 
     # infer dataset
     test_index = range(df.shape[0])
