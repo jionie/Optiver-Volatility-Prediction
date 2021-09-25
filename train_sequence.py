@@ -32,9 +32,9 @@ from config import Config
 
 parser = argparse.ArgumentParser(description="arg parser")
 parser.add_argument("--fold", type=int, default=0, required=False, help="specify the fold for training")
-parser.add_argument("--model_type", type=str, default="lstm", required=False, help="specify the model type")
+parser.add_argument("--model_type", type=str, default="bert", required=False, help="specify the model type")
 parser.add_argument("--seed", type=int, default=2021, required=False, help="specify the seed")
-parser.add_argument("--batch_size", type=int, default=64, required=False, help="specify the batch size")
+parser.add_argument("--batch_size", type=int, default=256, required=False, help="specify the batch size")
 parser.add_argument("--accumulation_steps", type=int, default=1, required=False, help="specify the accumulation_steps")
 
 
@@ -148,27 +148,29 @@ class Quant:
         if warmup:
             self.optimizer_grouped_parameters = [
                 {"params": [p for n, p in param_optimizer],
-                 "lr": self.config.warmup_lr,
-                 "weight_decay": 0}
+                 "lr": self.config.warmup_lr}
             ]
 
         else:
             self.optimizer_grouped_parameters = [
                 {"params": [p for n, p in param_optimizer],
-                 "lr": self.config.max_lr,
-                 "weight_decay": 0}
+                 "lr": self.config.lr}
             ]
 
     def prepare_optimizer(self):
 
         # optimizer
         if self.config.optimizer_name == "Adam":
-            self.optimizer = torch.optim.Adam(self.optimizer_grouped_parameters, eps=self.config.adam_epsilon)
+            self.optimizer = torch.optim.Adam(self.optimizer_grouped_parameters,
+                                              eps=self.config.adam_epsilon,
+                                              weight_decay=self.config.weight_decay,
+                                              )
         elif self.config.optimizer_name == "Ranger":
             self.optimizer = Ranger(self.optimizer_grouped_parameters)
         elif self.config.optimizer_name == "AdamW":
             self.optimizer = AdamW(self.optimizer_grouped_parameters,
                                    eps=self.config.adam_epsilon,
+                                   weight_decay=self.config.weight_decay,
                                    betas=(0.9, 0.999))
         else:
             raise NotImplementedError
@@ -546,7 +548,7 @@ if __name__ == "__main__":
     # )
 
     # update fold
-    for fold in range(1):
+    for fold in range(5):
         config = Config(
             fold,
             model_type=args.model_type,

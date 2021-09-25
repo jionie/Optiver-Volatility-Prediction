@@ -11,8 +11,8 @@ class TransfomerModel(nn.Module):
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
 
-        self.cate_hidden_size = config.hidden_size // 8
-        self.cont_hidden_size = config.hidden_size - config.hidden_size // 8
+        self.cate_hidden_size = config.hidden_size // 4
+        self.cont_hidden_size = config.hidden_size - config.hidden_size // 4
         self.extra_hidden_size = config.total_extra_size
 
         # if exists category features
@@ -100,8 +100,8 @@ class LSTMATTNModel(nn.Module):
         cate_col_size = len(config.cate_cols)
         cont_col_size = len(config.cont_cols)
 
-        self.cate_hidden_size = config.hidden_size // 8
-        self.cont_hidden_size = config.hidden_size - config.hidden_size // 8
+        self.cate_hidden_size = config.hidden_size // 4
+        self.cont_hidden_size = config.hidden_size - config.hidden_size // 4
         self.extra_hidden_size = config.total_extra_size
 
         # if exists category features
@@ -128,7 +128,7 @@ class LSTMATTNModel(nn.Module):
         self.encoder = nn.LSTM(
             config.hidden_size,
             config.hidden_size,
-            1,
+            config.num_hidden_layers,
             dropout=config.dropout,
             batch_first=True
         )

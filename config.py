@@ -78,9 +78,9 @@ class Config:
         self.emb_size = 64
         self.hidden_size = 64
         self.target_size = len(self.target_cols)
-        self.dropout = 0.2
+        self.dropout = 0.1
         self.num_hidden_layers = 2
-        self.num_attention_heads = 8
+        self.num_attention_heads = 4
 
         # path, specify the path for saving model
         self.checkpoint_pretrain = os.path.join("../ckpts/pretrain", self.model_name + "/" + self.model_type + "-" + str(self.seed) + "/fold_0/pytorch_model.bin")
@@ -107,26 +107,25 @@ class Config:
         self.max_grad_norm = 2
 
         # lr scheduler, can choose to use proportion or steps
-        self.lr_scheduler_name = "MultiStepLR"
+        self.lr_scheduler_name = "WarmupLinear"
         self.milestones = [5, 10]
         self.warmup_proportion = 0
         self.warmup_steps = 200
         self.warmup_epoches = 1
 
         # lr
-        self.max_lr = 1e-3
         self.warmup_lr = 5e-5
         self.min_lr = 1e-5
-        self.lr = 2e-4
+        self.lr = 1e-3
         self.weight_decay = 0.001
 
         # gradient accumulation
         self.accumulation_steps = accumulation_steps
         # epochs
-        self.num_epoch = 10
+        self.num_epoch = 20
         # saving rate
-        self.saving_rate = 1 / 3
+        self.saving_rate = 1
         # early stopping
-        self.early_stopping = 30  # 10 epoch
+        self.early_stopping = 10  # 10 epoch
         # progress rate
-        self.progress_rate = 1 / 3
+        self.progress_rate = 1
