@@ -79,7 +79,7 @@ class Config:
         self.hidden_size = 64
         self.target_size = len(self.target_cols)
         self.dropout = 0.1
-        self.num_hidden_layers = 2
+        self.num_hidden_layers = 1
         self.num_attention_heads = 4
 
         # path, specify the path for saving model
@@ -122,10 +122,10 @@ class Config:
         # gradient accumulation
         self.accumulation_steps = accumulation_steps
         # epochs
-        self.num_epoch = 20
+        self.num_epoch = 30
         # saving rate
         self.saving_rate = 1
         # early stopping
-        self.early_stopping = 10  # 10 epoch
+        self.early_stopping = 5  # 5 epoch
         # progress rate
         self.progress_rate = 1

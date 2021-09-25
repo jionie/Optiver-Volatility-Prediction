@@ -50,15 +50,19 @@ class TransfomerModel(nn.Module):
 
         def get_reg():
             return nn.Sequential(
-                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
-                nn.LayerNorm(config.hidden_size + self.extra_hidden_size),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size * 2),
+                nn.LayerNorm(config.hidden_size * 2),
                 nn.Dropout(config.dropout),
                 nn.SiLU(),
-                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
-                nn.LayerNorm(config.hidden_size+ self.extra_hidden_size),
+                nn.Linear(config.hidden_size * 2, config.hidden_size),
+                nn.LayerNorm(config.hidden_size),
                 nn.Dropout(config.dropout),
                 nn.SiLU(),
-                nn.Linear(config.hidden_size+ self.extra_hidden_size, config.target_size),
+                nn.Linear(config.hidden_size, config.hidden_size // 2),
+                nn.LayerNorm(config.hidden_size // 2),
+                nn.Dropout(config.dropout),
+                nn.SiLU(),
+                nn.Linear(config.hidden_size // 2, config.target_size),
             )
 
         self.reg_layer = get_reg()
@@ -146,15 +150,19 @@ class LSTMATTNModel(nn.Module):
 
         def get_reg():
             return nn.Sequential(
-                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
-                nn.LayerNorm(config.hidden_size + self.extra_hidden_size),
+                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size * 2),
+                nn.LayerNorm(config.hidden_size * 2),
                 nn.Dropout(config.dropout),
                 nn.SiLU(),
-                nn.Linear(config.hidden_size + self.extra_hidden_size, config.hidden_size + self.extra_hidden_size),
-                nn.LayerNorm(config.hidden_size + self.extra_hidden_size),
+                nn.Linear(config.hidden_size * 2, config.hidden_size),
+                nn.LayerNorm(config.hidden_size),
                 nn.Dropout(config.dropout),
                 nn.SiLU(),
-                nn.Linear(config.hidden_size + self.extra_hidden_size, config.target_size),
+                nn.Linear(config.hidden_size, config.hidden_size // 2),
+                nn.LayerNorm(config.hidden_size // 2),
+                nn.Dropout(config.dropout),
+                nn.SiLU(),
+                nn.Linear(config.hidden_size // 2, config.target_size),
             )
 
         self.reg_layer = get_reg()
