@@ -28,18 +28,20 @@ class Config:
         self.total_cate_size = 112  # 112 stocks in total
 
         self.order_features = [
-            "bid_price1",
-            "ask_price1",
-            "bid_size1",
-            "ask_size1",
-            "bid_price2",
-            "ask_price2",
-            "bid_size2",
-            "ask_size2"
+            "wap1",
+            "wap2",
+            "bid_ask_spread1",
+            "bid_ask_spread2",
+            "order_flow_imbalance1",
+            "order_flow_imbalance2",
+            "depth_imbalance1",
+            "depth_imbalance2",
+            "height_imbalance1",
+            "height_imbalance2"
         ]
         self.trade_features = [
             "price",
-            "size",
+            "volumes",
             "order_count"
         ]
         self.cont_cols = self.order_features + self.trade_features
